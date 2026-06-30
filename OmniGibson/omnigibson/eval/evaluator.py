@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch as th
-from hydra.utils import instantiate
+from hydra.utils import get_class, instantiate
 from omegaconf import DictConfig, OmegaConf
 
 import omnigibson as og
@@ -45,11 +45,6 @@ LIGHT_EVAL_TASKS = {"turning_out_all_lights_before_sleep"}
 EVAL_BASE_LINK_MASS = 250.0
 EVAL_HEAD_HORIZONTAL_APERTURE = 40.0
 NUM_TEST_INSTANCES = 40
-# Eval-time robot camera resolution. Set at env-creation (below) rather than via the wrapper because
-# in multi-env mode robot cameras are batched into a single TiledVisionSensor whose resolution is
-# fixed at creation -- a post-hoc per-sensor resize (DefaultWrapper) does not affect it. Matches
-# DefaultWrapper's 224x224 so its resize is a consistent no-op.
-EVAL_CAMERA_RESOLUTION = (224, 224)  # (H, W)
 
 gm.USE_GPU_DYNAMICS = False
 gm.ENABLE_TRANSITION_RULES = True
@@ -218,12 +213,24 @@ class Evaluator:
             )
         ]
         cfg["robots"][0]["model"] = cfg["robots"][0].pop("type")
-        cfg["robots"][0]["obs_modalities"] = ["proprio", "rgb"]
         cfg["robots"][0]["proprio_obs"] = list(PROPRIOCEPTION_INDICES["R1Pro"].keys())
-        # Set the eval camera resolution at creation so the (multi-env) TiledVisionSensor is built at
-        # the right size; see EVAL_CAMERA_RESOLUTION.
-        cfg["robots"][0]["sensor_config"]["VisionSensor"]["sensor_kwargs"]["image_height"] = EVAL_CAMERA_RESOLUTION[0]
-        cfg["robots"][0]["sensor_config"]["VisionSensor"]["sensor_kwargs"]["image_width"] = EVAL_CAMERA_RESOLUTION[1]
+
+        # Camera resolution + modalities are decided by the chosen eval wrapper and baked into the
+        # robot config HERE, before env creation. This is required (not just cleaner) because in
+        # multi-env mode robot cameras are batched into a single TiledVisionSensor whose resolution is
+        # fixed at creation -- a post-hoc per-sensor resize in the wrapper would be silently ignored.
+        # Resolve the wrapper class (without instantiating it -- that needs the env) to read its spec.
+        camera_spec = get_class(env_wrapper["_target_"]).camera_spec()
+        cfg["robots"][0]["obs_modalities"] = ["proprio", *camera_spec["modalities"]]
+        # Per-camera resolution via per-link sensor_config overrides. The link key is
+        # "<link>:Camera:0" (see robots/robot.py), which takes precedence over the class-level
+        # VisionSensor default; derive it from the robot-prefixed camera name in ROBOT_CAMERA_NAMES.
+        for camera_id, camera_name in ROBOT_CAMERA_NAMES["R1Pro"].items():
+            link_key = camera_name.split("::")[1].split(":", 1)[1]
+            height, width = camera_spec["resolution"][camera_id]
+            cfg["robots"][0]["sensor_config"][link_key] = {
+                "sensor_kwargs": {"image_height": height, "image_width": width}
+            }
         if self.cfg.robot.controllers is not None:
             cfg["robots"][0]["controller_config"].update(
                 OmegaConf.to_container(self.cfg.robot.controllers, resolve=True)
