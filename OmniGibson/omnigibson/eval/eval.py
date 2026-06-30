@@ -123,6 +123,7 @@ def main() -> None:
                 video_path=video_dir,
                 metrics_dir=json_dir,
                 rollout_id=rollout_id,
+                video_fps=args.video_fps,
             )
             results.extend(rollout_results.values())
 

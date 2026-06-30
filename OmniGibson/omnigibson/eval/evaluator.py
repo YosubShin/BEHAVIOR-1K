@@ -357,6 +357,12 @@ class Evaluator:
         """
         robot = self.robots[env_idx]
         scene = self.env.scenes[env_idx]
+        # Start every instance from a CLEAN robot: reset joints / controllers / velocities (and release
+        # grasp) to the default config -- the instance TRO only restores the robot's base pose below.
+        # 2285 got this for free from evaluator.reset() (env.reset) before each load_task_instance; in
+        # the batched path we must do it explicitly, otherwise the previous episode's/batch's robot
+        # joint+grasp state carries into the snapshot taken in _settle_and_finalize.
+        robot.reset()
         scene_model = self.env.task.scene_name
         tro_filename = self.env.task.get_cached_activity_scene_filename(
             scene_model=scene_model,
@@ -398,14 +404,16 @@ class Evaluator:
     def _settle_and_finalize(self, slots: List[int]) -> None:
         """
         Settle physics for all freshly-loaded @slots together and finalize each one's scene. Loading
-        state can introduce jitter, so keep loaded task-relevant objects (not the robot) still for a
-        few sub-steps before snapshotting each scene's initial state.
+        state can introduce jitter, so keep all loaded task-relevant entities (including the robot,
+        which _load_instance_state just reset to a clean config) still for a few sub-steps before
+        snapshotting each scene's initial state -- otherwise the robot drifts under gravity before the
+        snapshot.
         """
         for _ in range(25):
             og.sim.step_physics()
             for slot in slots:
                 for inst, entity in self.env.task.object_scope[slot].items():
-                    if not is_system_bddl_inst(inst) and entity is not None and not isinstance(entity, Robot):
+                    if not is_system_bddl_inst(inst) and entity is not None:
                         entity.keep_still()
         for slot in slots:
             self.env.scenes[slot].update_initial_file()
@@ -417,6 +425,7 @@ class Evaluator:
         write_video: bool = False,
         video_path: str = None,
         rollout_id: int = 0,
+        video_fps: int = 30,
     ) -> None:
         """
         Load a batch of instances (one per slot) into their slots, settle the whole batch together,
@@ -428,16 +437,26 @@ class Evaluator:
             self._load_instance_state(slot_to_instance[slot], env_idx=slot)
         self._settle_and_finalize(ordered_slots)
         obs_list, _ = self.env.reset(env_indices=th.tensor(ordered_slots, dtype=th.long))
+        for slot in ordered_slots:
+            self._reset_light_synchronizer(slot)
+        # Light toggles change visibility after the reset obs was captured; re-render + re-fetch so the
+        # first obs reflects the synced lights (mirrors single-env _sync_lights_and_get_obs). No-op for
+        # non-light tasks.
+        if self.should_sync_lights:
+            for _ in range(3):
+                og.sim.render()
+            obs_list, _ = self.env.get_obs(env_indices=th.tensor(ordered_slots, dtype=th.long))
         task_name = self.cfg.task.name
         for i, slot in enumerate(ordered_slots):
-            self._reset_light_synchronizer(slot)
             self.obs[slot] = self._preprocess_obs(obs_list[i], env_idx=slot)
             self.policies[slot].reset()
             for metric in self.metrics[slot]:
                 metric.reset(self.env)
             if write_video:
                 video_name = os.path.join(video_path, f"{task_name}_{slot_to_instance[slot]}_{rollout_id}.mp4")
-                self._set_video_writer(slot, create_video_writer(fpath=video_name, resolution=(448, 672)))
+                self._set_video_writer(
+                    slot, create_video_writer(fpath=video_name, resolution=(448, 672), rate=video_fps)
+                )
 
     def _preprocess_obs(self, obs: dict, env_idx: int = 0) -> dict:
         robot = self.robots[env_idx]
@@ -463,9 +482,11 @@ class Evaluator:
         obs = self.obs[env_idx]
         if obs is None or ROBOT_CAMERA_NAMES["R1Pro"]["head"] + "::rgb" not in obs:
             return
-        left_wrist_rgb = cv2.resize(obs[ROBOT_CAMERA_NAMES["R1Pro"]["left_wrist"] + "::rgb"].numpy(), (224, 224))
-        right_wrist_rgb = cv2.resize(obs[ROBOT_CAMERA_NAMES["R1Pro"]["right_wrist"] + "::rgb"].numpy(), (224, 224))
-        head_rgb = cv2.resize(obs[ROBOT_CAMERA_NAMES["R1Pro"]["head"] + "::rgb"].numpy(), (448, 448))
+        # .detach().cpu() is required for num_envs>1: robot cameras come from the TiledVisionSensor,
+        # whose obs are CUDA tensors (a plain .numpy() would raise). No-op for single-env CPU tensors.
+        left_wrist_rgb = cv2.resize(obs[ROBOT_CAMERA_NAMES["R1Pro"]["left_wrist"] + "::rgb"].detach().cpu().numpy(), (224, 224))
+        right_wrist_rgb = cv2.resize(obs[ROBOT_CAMERA_NAMES["R1Pro"]["right_wrist"] + "::rgb"].detach().cpu().numpy(), (224, 224))
+        head_rgb = cv2.resize(obs[ROBOT_CAMERA_NAMES["R1Pro"]["head"] + "::rgb"].detach().cpu().numpy(), (448, 448))
         write_video(
             np.expand_dims(np.hstack([np.vstack([left_wrist_rgb, right_wrist_rgb]), head_rgb]), 0),
             video_writer=self._video_writers[env_idx],
@@ -478,6 +499,12 @@ class Evaluator:
         obs_list, _ = self.env.reset()
         for env_idx in range(self.num_envs):
             self._reset_light_synchronizer(env_idx)
+        # Refresh obs after light visibility changes so the first obs is in sync (see load_batch).
+        if self.should_sync_lights:
+            for _ in range(3):
+                og.sim.render()
+            obs_list, _ = self.env.get_obs()
+        for env_idx in range(self.num_envs):
             self.obs[env_idx] = self._preprocess_obs(obs_list[env_idx], env_idx=env_idx)
             for metric in self.metrics[env_idx]:
                 metric.reset(self.env)
@@ -491,6 +518,7 @@ class Evaluator:
         video_path: str = None,
         metrics_dir: str = None,
         rollout_id: int = 0,
+        video_fps: int = 30,
     ) -> dict:
         """
         Offline driver: evaluate every instance in @instances_to_run, processing them ``num_envs`` at a
@@ -503,7 +531,11 @@ class Evaluator:
 
         def load_fn(slot_to_instance):
             self.load_batch(
-                slot_to_instance, write_video=write_video, video_path=video_path, rollout_id=rollout_id
+                slot_to_instance,
+                write_video=write_video,
+                video_path=video_path,
+                rollout_id=rollout_id,
+                video_fps=video_fps,
             )
 
         def step_fn(active_slots):
