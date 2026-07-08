@@ -395,7 +395,15 @@ class Evaluator:
                 )
                 scene.write_task_metadata(key=tro_key, data=tro_state)
             else:
-                self.env.task.object_scope[env_idx][tro_key].load_state(tro_state, serialized=False)
+                # load_state applies the TRO root-link pose in WORLD frame, but the TRO is authored in
+                # scene-relative (env 0) coordinates. For multi envs (env_idx != 0) the scene prim is
+                # shifted by its world offset, so add that offset to the root-link position up front --
+                # load_state then places the object correctly in a single write.
+                obj = self.env.task.object_scope[env_idx][tro_key]
+                if env_idx != 0 and isinstance(tro_state, dict) and "root_link" in tro_state:
+                    scene_offset = scene._scene_prim.get_position_orientation()[0]
+                    tro_state["root_link"]["pos"] = tro_state["root_link"]["pos"] + scene_offset
+                obj.load_state(tro_state, serialized=False)
 
         if self.should_sync_lights:
             set_light_control_toggles(self.env.task.object_scope[env_idx].values(), True)
@@ -484,8 +492,12 @@ class Evaluator:
             return
         # .detach().cpu() is required for num_envs>1: robot cameras come from the TiledVisionSensor,
         # whose obs are CUDA tensors (a plain .numpy() would raise). No-op for single-env CPU tensors.
-        left_wrist_rgb = cv2.resize(obs[ROBOT_CAMERA_NAMES["R1Pro"]["left_wrist"] + "::rgb"].detach().cpu().numpy(), (224, 224))
-        right_wrist_rgb = cv2.resize(obs[ROBOT_CAMERA_NAMES["R1Pro"]["right_wrist"] + "::rgb"].detach().cpu().numpy(), (224, 224))
+        left_wrist_rgb = cv2.resize(
+            obs[ROBOT_CAMERA_NAMES["R1Pro"]["left_wrist"] + "::rgb"].detach().cpu().numpy(), (224, 224)
+        )
+        right_wrist_rgb = cv2.resize(
+            obs[ROBOT_CAMERA_NAMES["R1Pro"]["right_wrist"] + "::rgb"].detach().cpu().numpy(), (224, 224)
+        )
         head_rgb = cv2.resize(obs[ROBOT_CAMERA_NAMES["R1Pro"]["head"] + "::rgb"].detach().cpu().numpy(), (448, 448))
         write_video(
             np.expand_dims(np.hstack([np.vstack([left_wrist_rgb, right_wrist_rgb]), head_rgb]), 0),
