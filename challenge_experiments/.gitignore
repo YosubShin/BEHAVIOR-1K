@@ -1,0 +1,6 @@
+# Transient run logs (contain local paths + progress-bar noise)
+*.log
+# Python caches
+__pycache__/
+# Large rollout videos — regenerate with `--write-video`
+**/videos/

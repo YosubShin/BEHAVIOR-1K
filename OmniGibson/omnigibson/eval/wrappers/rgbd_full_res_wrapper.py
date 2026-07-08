@@ -1,3 +1,4 @@
+import omnigibson as og
 from omnigibson.envs import EnvironmentWrapper, Environment
 from omnigibson.utils.ui_utils import create_module_logger
 from omnigibson.eval.utils.eval_utils import (
@@ -37,6 +38,12 @@ class RGBDFullResWrapper(EnvironmentWrapper):
             else:
                 sensor.image_height = WRIST_RESOLUTION[0]
                 sensor.image_width = WRIST_RESOLUTION[1]
+        # Ensure physics tensor views are initialized before reloading the observation space.
+        # load_observation_space() reads robot joint positions to compute proprioception_dim,
+        # but at wrapper-construction time the articulation view may not be created yet
+        # (the Evaluator only calls update_handles() after building the wrapper). No-ops if
+        # the sim is not playing.
+        og.sim.update_handles()
         # reload observation space
         env.load_observation_space()
         logger.info("Reloaded observation space!")
