@@ -115,6 +115,13 @@ def main():
     p.add_argument("--dataset-root", default="/mnt/nas/2026-challenge-demos")
     p.add_argument("--task", default="turning_on_radio")
     p.add_argument("--episodes", type=int, default=20, help="number of demo episodes to convert")
+    p.add_argument(
+        "--trim-last-steps",
+        type=int,
+        default=0,
+        help="keep only the final K steps of each episode (demos end at success, so the tail "
+        "is the manipulation segment — used for the short-horizon 'mini task' regime)",
+    )
     p.add_argument("--out", required=True)
     args = p.parse_args()
 
@@ -132,6 +139,9 @@ def main():
     cur_ep, buf, out_idx = None, None, 0
 
     def flush(ep_buf, idx):
+        if args.trim_last_steps > 0:
+            for k in ep_buf:
+                ep_buf[k] = ep_buf[k][-args.trim_last_steps :]
         ep_dir = os.path.join(args.out, str(idx))
         os.makedirs(ep_dir, exist_ok=True)
         T = len(ep_buf["state"])

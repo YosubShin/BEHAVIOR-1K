@@ -98,6 +98,10 @@ class BehaviorEnvOps:
         perturb_pose: bool = False,
         seed: int = 0,
         full_res: bool = False,
+        snapshot_record_dir: str | None = None,
+        snapshot_every: int = 30,
+        snapshot_window: tuple[int, int] = (150, 600),
+        start_snapshot_dir: str | None = None,
     ):
         self.task_name = task_name
         self.instance_ids = instance_ids
@@ -143,6 +147,29 @@ class BehaviorEnvOps:
         self._last_reward = 0.0
         self._success = False
         self._done = False
+
+        # --- sim-state snapshots (mini-task starts / reset-to-state curricula) ---
+        # Record mode: buffer full sim states every `snapshot_every` steps; when an
+        # episode SUCCEEDS, persist the ones `snapshot_window` steps before success
+        # ("in front of the radio, pre-toggle" states from real successful rollouts).
+        # Start mode: reset() loads a random saved snapshot -> short-horizon episodes.
+        self._snap_record_dir = snapshot_record_dir
+        self._snap_every = snapshot_every
+        self._snap_window = snapshot_window
+        self._snap_ring: list = []
+        self._episode_uid = 0
+        if snapshot_record_dir:
+            import os as _os
+
+            _os.makedirs(snapshot_record_dir, exist_ok=True)
+        self._start_snaps: list[str] = []
+        if start_snapshot_dir:
+            import glob as _glob
+
+            self._start_snaps = sorted(_glob.glob(f"{start_snapshot_dir}/*.pt"))
+            if not self._start_snaps:
+                raise FileNotFoundError(f"start_snapshot_dir has no .pt snapshots: {start_snapshot_dir}")
+            logger.info(f"mini-task mode: {len(self._start_snaps)} start snapshots loaded")
 
     # ---- helpers -----------------------------------------------------------
     @staticmethod
@@ -224,6 +251,22 @@ class BehaviorEnvOps:
             self._perturb_robot_pose()
         self.evaluator.reset()
 
+        if self._start_snaps:
+            import torch as th
+
+            snap_path = self._start_snaps[int(self._rng.integers(len(self._start_snaps)))]
+            state = th.load(snap_path, weights_only=False)
+            import omnigibson as og
+
+            og.sim.load_state(state, serialized=False)
+            # settle briefly so contacts/velocities are consistent
+            for _ in range(5):
+                og.sim.step_physics()
+            obs, _ = self.env.get_obs()
+            self.evaluator.obs = self.evaluator._preprocess_obs(obs)
+
+        self._snap_ring = []
+        self._episode_uid += 1
         self._steps = 0
         self._snapshot_initial_predicates()
         self._prev_q = self._q_score()
@@ -261,7 +304,30 @@ class BehaviorEnvOps:
         self._done = bool(terminated or truncated)
         if self._done and not self.dense_reward:
             self._last_reward = q  # sparse variant: final partial credit only
+
+        if self._snap_record_dir:
+            if self._steps % self._snap_every == 0 and not self._done:
+                import omnigibson as og
+
+                self._snap_ring.append((self._steps, og.sim.dump_state(serialized=False)))
+            if self._done and self._success:
+                self._persist_snapshots()
         return {"action": a, "action_type": "policy"}
+
+    def _persist_snapshots(self) -> None:
+        """On success, save the buffered states from `snapshot_window` steps before the end."""
+        import torch as th
+
+        lo, hi = self._snap_window
+        kept = 0
+        for step, state in self._snap_ring:
+            back = self._steps - step
+            if lo <= back <= hi:
+                p = f"{self._snap_record_dir}/{self.task_name}_ep{self._episode_uid:05d}_t{step:05d}_b{back:04d}.pt"
+                th.save(state, p)
+                kept += 1
+        logger.info(f"SUCCESS at step {self._steps}: persisted {kept} pre-success snapshots (window {lo}-{hi})")
+        self._snap_ring = []
 
     def get_observation(self) -> dict:
         return {"observation": self._observation()}
@@ -308,6 +374,8 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
             perturb_pose=req.get("perturb_pose", server_cfg["perturb_pose"]),
             seed=req.get("seed", server_cfg["seed"]),
             full_res=req.get("full_res", server_cfg["full_res"]),
+            snapshot_record_dir=server_cfg["snapshot_record_dir"],
+            start_snapshot_dir=server_cfg["start_snapshot_dir"],
         )
         env_id = str(uuid.uuid4())[:8]
         state[env_id] = env
@@ -349,6 +417,8 @@ def main():
     p.add_argument("--perturb-pose", action="store_true")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--full-res", action="store_true", help="render 720/480 RGBD (eval-faithful, ~2x slower)")
+    p.add_argument("--snapshot-record-dir", default=None, help="record pre-success sim states here")
+    p.add_argument("--start-snapshot-dir", default=None, help="mini-task mode: reset from these snapshots")
     args = p.parse_args()
     server_cfg = {
         "task_name": args.task_name,
@@ -358,6 +428,8 @@ def main():
         "perturb_pose": args.perturb_pose,
         "seed": args.seed,
         "full_res": args.full_res,
+        "snapshot_record_dir": args.snapshot_record_dir,
+        "start_snapshot_dir": args.start_snapshot_dir,
     }
 
     request_q: "queue.Queue" = queue.Queue()
