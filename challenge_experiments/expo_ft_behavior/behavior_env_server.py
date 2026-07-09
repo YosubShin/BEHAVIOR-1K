@@ -102,6 +102,8 @@ class BehaviorEnvOps:
         snapshot_every: int = 30,
         snapshot_window: tuple[int, int] = (150, 600),
         start_snapshot_dir: str | None = None,
+        start_near_object: str | None = None,
+        start_distance: float = 0.6,
     ):
         self.task_name = task_name
         self.instance_ids = instance_ids
@@ -162,6 +164,12 @@ class BehaviorEnvOps:
             import os as _os
 
             _os.makedirs(snapshot_record_dir, exist_ok=True)
+        # Mini-task alternative: hand-placed start facing a task object (privileged
+        # info at training-env setup time is challenge-legal). Deterministic and
+        # independent of base-policy success rate, unlike the snapshot pool.
+        self._start_near_object = start_near_object
+        self._start_distance = start_distance
+
         self._start_snaps: list[str] = []
         if start_snapshot_dir:
             import glob as _glob
@@ -265,6 +273,9 @@ class BehaviorEnvOps:
             obs, _ = self.env.get_obs()
             self.evaluator.obs = self.evaluator._preprocess_obs(obs)
 
+        if self._start_near_object:
+            self._place_robot_near_object()
+
         self._snap_ring = []
         self._episode_uid += 1
         self._steps = 0
@@ -287,6 +298,49 @@ class BehaviorEnvOps:
         new_quat = T.quat_multiply(quat, yaw_q)
         new_pos = pos + th.tensor([dx, dy, 0.0])
         self.robot.set_position_orientation(new_pos, new_quat)
+
+    def _place_robot_near_object(self) -> None:
+        """Teleport the robot base to `start_distance` m in front of the named task
+        object, facing it (plus small jitter). Arms stay at reset pose."""
+        import math
+
+        import omnigibson as og
+        import omnigibson.utils.transform_utils as T
+        import torch as th
+
+        target = None
+        for inst, entity in self.env.task.object_scope.items():
+            if self._start_near_object.lower() in inst.lower() and entity is not None:
+                target = entity
+                break
+        if target is None:
+            raise KeyError(
+                f"start_near_object '{self._start_near_object}' not in task scope: "
+                f"{list(self.env.task.object_scope.keys())}"
+            )
+        obj_pos, _ = target.get_position_orientation()
+        robot_pos, _ = self.robot.get_position_orientation()
+
+        d = self._start_distance + float(self._rng.uniform(-0.05, 0.05))
+        # Approach from the side of the task's original robot spawn (guaranteed free
+        # space) with ±30° jitter — a uniform direction would clip into the wall or
+        # furniture the object sits against.
+        theta = math.atan2(float(robot_pos[1]) - float(obj_pos[1]), float(robot_pos[0]) - float(obj_pos[0]))
+        theta += float(self._rng.uniform(-math.pi / 6, math.pi / 6))
+        base_x = float(obj_pos[0]) + d * math.cos(theta)
+        base_y = float(obj_pos[1]) + d * math.sin(theta)
+        yaw = math.atan2(float(obj_pos[1]) - base_y, float(obj_pos[0]) - base_x)
+        yaw += float(self._rng.uniform(-math.pi / 24, math.pi / 24))  # ±7.5° facing jitter
+
+        new_pos = th.tensor([base_x, base_y, float(robot_pos[2])])
+        new_quat = T.euler2quat(th.tensor([0.0, 0.0, yaw]))
+        self.robot.set_position_orientation(new_pos, new_quat)
+        og.sim.update_handles()
+        for _ in range(5):
+            og.sim.step_physics()
+            self.robot.keep_still()
+        obs, _ = self.env.get_obs()
+        self.evaluator.obs = self.evaluator._preprocess_obs(obs)
 
     def step(self, action: list) -> dict:
         a = np.asarray(action, dtype=np.float32)
@@ -376,6 +430,8 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
             full_res=req.get("full_res", server_cfg["full_res"]),
             snapshot_record_dir=server_cfg["snapshot_record_dir"],
             start_snapshot_dir=server_cfg["start_snapshot_dir"],
+            start_near_object=server_cfg["start_near_object"],
+            start_distance=server_cfg["start_distance"],
         )
         env_id = str(uuid.uuid4())[:8]
         state[env_id] = env
@@ -419,6 +475,8 @@ def main():
     p.add_argument("--full-res", action="store_true", help="render 720/480 RGBD (eval-faithful, ~2x slower)")
     p.add_argument("--snapshot-record-dir", default=None, help="record pre-success sim states here")
     p.add_argument("--start-snapshot-dir", default=None, help="mini-task mode: reset from these snapshots")
+    p.add_argument("--start-near-object", default=None, help="mini-task: teleport base near this task object (e.g. radio)")
+    p.add_argument("--start-distance", type=float, default=0.6)
     args = p.parse_args()
     server_cfg = {
         "task_name": args.task_name,
@@ -430,6 +488,8 @@ def main():
         "full_res": args.full_res,
         "snapshot_record_dir": args.snapshot_record_dir,
         "start_snapshot_dir": args.start_snapshot_dir,
+        "start_near_object": args.start_near_object,
+        "start_distance": args.start_distance,
     }
 
     request_q: "queue.Queue" = queue.Queue()
