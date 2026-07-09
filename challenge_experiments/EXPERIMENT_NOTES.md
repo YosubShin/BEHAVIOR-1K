@@ -325,6 +325,82 @@ individual instances. DefaultWrapper is NOT a faithful proxy → keep RGBDFullRe
 DefaultWrapper only for coarse debugging. Caveat: n=1/instance, so wrapper-effect vs sim-nondeterminism not fully
 separable without k-rollout repeats. Results: `pi05_eval_0to9_default/` vs `pi05_eval_0to9/`.
 
+## Multi-process throughput benchmark (K=2, 2026-07-08)
+
+`challenge_experiments/parallel_bench.sh` — DefaultWrapper, 2000 steps, load-subtracted via a calibration run.
+**CAVEAT: GPU was already 100% util from a concurrent `lerobot-train` job (~/co/aic, 24.9 GB) + our π0.5 server
+(39.5 GB), ~31 GB free.** So this is throughput-UNDER-LOAD, not clean scaling.
+
+Results: load 110s; single-env stepping 144s = 13.9 steps/s; K=2 stepping 299s/env → aggregate 13.4 steps/s.
+**Throughput benefit = 0.97× (≈ none).** Two envs each ran ~2× slower → time-sliced a saturated bottleneck, zero gain.
+End-to-end 2 rollouts: serial 399s vs parallel 409s (0.98×). Min free GPU mem 9.8 GB (2 DefaultWrapper sims ≈ 21 GB
+peak; K=3 would risk OOM here — guard capped at K=2). Training never at risk.
+
+Interpretation: expected under a pre-saturated GPU (no spare compute to parallelize into). Does NOT prove multi-process
+is useless on a FREE GPU. Two tangled bottlenecks this run can't separate: (1) GPU compute saturation from training
+(gone on free GPU); (2) single π0.5 inference server serializing across sockets (persists even on free GPU → needs
+batched inference or server replicas for real multi-process scaling). Clean test = re-run on an idle GPU + address (2).
+
+## Repeatability / stochasticity (2026-07-08) — the 20% was noise
+
+3 rollouts × 10 instances, RGBDFullResWrapper, provided ckpt. Confirmed STOCHASTIC (diffusion sampling + sim
+nondeterminism): inst 301's 3 rollouts took different base-distance paths.
+- Repeat: **2/30 = 7%** (inst 305 1/3, inst 308 1/3; all others 0/3). Per-pass: 1/10, 1/10, 0/10.
+- Pooled with original 2/10 run → **4/40 ≈ 10% overall**; per-pass swung **0%→20%**. No instance reliably solved
+  (308 ~2/4, 305/306 ~1/4, rest 0/4).
+- **Takeaway: single 0–9 pass is far too noisy; provided π0.5 on turning_on_radio ≈ ~10% (CI ~3–24%), not 20%.**
+  This is why the challenge averages 100 tasks × 10 instances = 1000 rollouts. Reinforces lit-review: winners used
+  variance-reduction tricks (multi-sample flow matching, action smoothing, correction rules).
+Cloned winning solutions for reference: `/mnt/nvme/behavior-1k-solution` (#1), `/mnt/nvme/openpi-comet` (#2).
+
+## EXPO-FT adoption — Phase 0 setup (2026-07-08)
+
+Direction chosen: sim↔real EXPO-FT bridge (BEHAVIOR sim as RL-dev lab; recipe transfers to aloha-mini).
+Repo cloned: `/mnt/nvme/expo-ft` (+ its openpi fork at `expo_ft/agents/vla/openpi`, branch `expo_ft`; server venv via uv).
+
+**How EXPO-FT actually works** (from `expo_ft/agents/alg/expo_ft.py`):
+- Base π0.5 is NOT frozen — `update_actor` keeps BC-finetuning it on success episodes only (`actor_success_only=True`)
+  → EXPO-FT literally contains RFT inside it (free baseline for ablations).
+- Residual "edit" actor: small MLP (256×3, TanhNormal) over action CHUNKS (`full_action_dim=replan_steps×action_dim`),
+  output scaled by `edit_scale=0.2` (stability = bounded correction). SAC-style update w/ auto temperature.
+- Critic: REDQ ensemble (num_qs=10, min over random 2), own from-scratch ResNet encoder (latent 512), layer norm,
+  TD on chunk-level transitions, discount^replan_steps.
+- Policy = sample N=8 VLA chunks + 8 residual-edited → argmax target-Q over 16 candidates (rollout AND TD targets).
+- Their real-world reward was a hand-coded pixel detector (light2.py: "≤400 yellow px, 5 frames") → BDDL predicates
+  are strictly better supervision than what the method was built on.
+
+**Env interface** (5 websocket ops, `expo_ft/env/env_client.py`): create_env / reset / step / get_observation /
+get_info_for_step→(done, success, reward, mask). Obs dict: base_image, left_wrist_image, state, prompt.
+Reward/done/mask logic lives server-side.
+
+**Our adapter (scaffold, not yet run):** `challenge_experiments/expo_ft_behavior/behavior_env_server.py` —
+wraps the challenge Evaluator; reward = dense BDDL partial-credit delta (sparse ablation flag); mask=0 on success /
+1 on truncation; TRAIN instances only + optional Comet pose perturbation; 61→23 state extraction; one env per
+process (OmniGibson singleton) → parallelism via multiple server processes/ports.
+
+**Known risks:** long horizon (3-6k steps) is exactly where EXPO-FT is unproven (their tasks ~90 steps) — expect
+Phase 0 vanilla to struggle; that's the motivating result. 16 VLA samples/replan is expensive → batched sampling +
+maybe truncated task variant first. GPU now free (killed our pi05 server, was 39.5GB XLA prealloc; lerobot training done).
+
+## EXPO-FT env adapter — VALIDATED (2026-07-09)
+
+`expo_ft_behavior/behavior_env_server.py` + `smoke_client.py`. Smoke PASS: create_env 85s, reset 7s,
+obs contract (state(23,), 3 RGB cams, prompt), dense reward exactly 0.0 under zero actions, mask semantics,
+instance cycling + pose perturbation, **10.8 env-steps/s** (3 ws ops/step).
+
+Architecture lesson (3 iterations): Isaac Sim (a) schedules its own asyncio work → can't live inside an async
+ws server ("Cannot enter into task"), and (b) installs signal handlers → sim calls must run on the MAIN thread
+("signal only works in main thread"). Final design: **ws handler threads do wire-I/O only; main thread owns the
+sim and executes ops from a queue.** Also: reward now mirrors TaskMetric exactly (success⇒1.0; else max over
+disjunctive goal options of newly-true fraction, initially-true predicates excluded) — my first naive
+satisfied/total would have diverged from the leaderboard metric.
+(Ops lesson: pkill -f from inside a launcher can match the launcher itself → v3's first "result" was v2's stale
+log; watchers now verify a banner line before trusting logs.)
+
+Next (Phase 0 remaining): task config for train_pi_robo.py (mirror configs/task/light2.py → point at our server),
+offline replay-buffer seeding from our LeRobot demos (their loop expects base_image/left_wrist_image/state/actions),
+SFT init = our provided pi05 ckpt + its norm stats, then short vanilla run on turning_on_radio.
+
 ## Key file references
 
 | Purpose | Path |
