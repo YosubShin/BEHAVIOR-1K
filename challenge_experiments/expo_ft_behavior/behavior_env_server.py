@@ -97,6 +97,7 @@ class BehaviorEnvOps:
         dense_reward: bool = True,
         perturb_pose: bool = False,
         seed: int = 0,
+        full_res: bool = False,
     ):
         self.task_name = task_name
         self.instance_ids = instance_ids
@@ -110,9 +111,15 @@ class BehaviorEnvOps:
 
         from omnigibson.eval.evaluator import Evaluator
 
+        # RL data collection defaults to native-224 RGB rendering (DefaultWrapper):
+        # ~2x sim FPS vs full-res RGBD, and the policy consumes 224 anyway. Use
+        # full_res only when eval-faithful rendering matters more than throughput.
+        wrapper = (
+            "omnigibson.eval.wrappers.RGBDFullResWrapper" if full_res else "omnigibson.eval.wrappers.DefaultWrapper"
+        )
         cfg = OmegaConf.create(
             {
-                "env_wrapper": {"_target_": "omnigibson.eval.wrappers.RGBDFullResWrapper"},
+                "env_wrapper": {"_target_": wrapper},
                 "policy_name": "local",
                 "model": {"_target_": "omnigibson.eval.policies.LocalPolicy", "action_dim": None},
                 "headless": True,
@@ -189,7 +196,14 @@ class BehaviorEnvOps:
         rn = self.robot.name
 
         def rgb(cam_key):
-            return np.asarray(obs[self._cam[cam_key] + "::rgb"])[..., :3].astype(np.uint8)
+            img = np.asarray(obs[self._cam[cam_key] + "::rgb"])[..., :3].astype(np.uint8)
+            # Ship 224² regardless of render resolution: the learner resizes to 224
+            # anyway, and full-res frames are ~10x the websocket payload.
+            if img.shape[0] != 224 or img.shape[1] != 224:
+                import cv2
+
+                img = cv2.resize(img, (224, 224), interpolation=cv2.INTER_AREA)
+            return img
 
         return {
             "base_image": rgb("head"),
@@ -293,6 +307,7 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
             dense_reward=req.get("dense_reward", server_cfg["dense_reward"]),
             perturb_pose=req.get("perturb_pose", server_cfg["perturb_pose"]),
             seed=req.get("seed", server_cfg["seed"]),
+            full_res=req.get("full_res", server_cfg["full_res"]),
         )
         env_id = str(uuid.uuid4())[:8]
         state[env_id] = env
@@ -333,6 +348,7 @@ def main():
     p.add_argument("--sparse-reward", action="store_true", help="final partial credit only (default: dense delta)")
     p.add_argument("--perturb-pose", action="store_true")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--full-res", action="store_true", help="render 720/480 RGBD (eval-faithful, ~2x slower)")
     args = p.parse_args()
     server_cfg = {
         "task_name": args.task_name,
@@ -341,6 +357,7 @@ def main():
         "dense_reward": not args.sparse_reward,
         "perturb_pose": args.perturb_pose,
         "seed": args.seed,
+        "full_res": args.full_res,
     }
 
     request_q: "queue.Queue" = queue.Queue()
