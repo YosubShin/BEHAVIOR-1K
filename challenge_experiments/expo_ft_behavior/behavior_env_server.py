@@ -273,7 +273,12 @@ class BehaviorEnvOps:
             state = th.load(snap_path, weights_only=False)
             import omnigibson as og
 
-            og.sim.load_state(state, serialized=False)
+            if isinstance(state, dict) and "serialized_state" in state:
+                # Raw-dataset demo state: flat vector from og.sim.dump_state(serialized=True)
+                # (extracted at T-450 from task-0000 episodes = exact pre-success worlds).
+                og.sim.load_state(state["serialized_state"], serialized=True)
+            else:
+                og.sim.load_state(state, serialized=False)
             # settle briefly so contacts/velocities are consistent
             for _ in range(5):
                 og.sim.step_physics()
@@ -286,6 +291,22 @@ class BehaviorEnvOps:
 
         if self._start_near_object:
             self._place_robot_near_object()
+
+        # Spawn-view debug: dump the head-camera view at t=0 (ring of last 40)
+        # to compare against the mini-demos' first frames.
+        try:
+            import os as _os
+
+            import cv2 as _cv2
+
+            _os.makedirs("/mnt/nvme/expoft_debug/spawn_views", exist_ok=True)
+            _img = self._observation()["base_image"]
+            _cv2.imwrite(
+                f"/mnt/nvme/expoft_debug/spawn_views/spawn_ep{self._episode_uid % 40:03d}.png",
+                _cv2.cvtColor(_img, _cv2.COLOR_RGB2BGR),
+            )
+        except Exception:
+            logger.warning("spawn-view dump failed", exc_info=True)
 
         self._snap_ring = []
         self._episode_uid += 1
