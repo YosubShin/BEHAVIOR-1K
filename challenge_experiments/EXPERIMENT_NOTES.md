@@ -440,6 +440,30 @@ Fast-obs change committed (native-224 render + 224 shipping, ~1.5-2× expected) 
 NOTE confound: native-224 vs downsampled-224 shifted eval successes in our wrapper A/B — fix one obs mode per
 controlled experiment (--full-res flag exists).
 
+## MINI-RADIO PLAN (v1 derisk, decided 2026-07-09)
+
+Rationale (Yosub's call, correct): v0 conflates ~6 variables; first REPLICATE EXPO-FT's known-working regime
+(short horizon, near-manipulation start, sparse success reward) in our stack, then extend horizon as the single
+controlled variable. Bonus: radio's q_score is single-predicate → our "dense" reward is effectively sparse here
+= exactly EXPO-FT's setting. No shorter task exists in B1K (radio ~shortest at ~72s human) → truncated-start is
+the move. Target figure: SFT base success from near-radio starts vs EXPO-FT-trained — in an afternoon/day.
+
+Infra (committed c22f1cd): server `--snapshot-record-dir` (buffer sim states every 30 steps; persist window
+150-600 steps before success on successful episodes) + `--start-snapshot-dir` (mini-task: reset from pool +
+5-step settle + re-snapshot initial predicates). Converter `--trim-last-steps 450` → mini demos
+(`/mnt/nvme/expoft_demos/turning_on_radio_mini450`). Same snapshot machinery = reset-to-failure curricula later.
+
+**Overnight (running now):** collection run at 224 obs + snapshot recording (server) + v0.6-config training
+(learner `expoft_b1k_radio_v0_224snap`) — successes populate `/mnt/nvme/expoft_snapshots/turning_on_radio`.
+UTD 20 deliberately DEFERRED to the 5090 async setup (solo it halves throughput; async hides it — see analysis).
+Throughput analysis (measured): rollout 333s/ep full-res (9.7/s), updates ~220s/ep (utd10) → 6.5 eps/hr;
+224 → ~8.6; +5090 async actor utd10 → ~16 (learner-bound); utd20 → ~8 but full sample-efficiency.
+One async actor SATURATES the learner — learner-side speedups (per-minibatch augment, TD-sample reuse) before
+more actors. 3090s: actors (barely, slow) or better as EVAL fleet; cannot host learner. Mini-task: 450-step
+episodes → tens of eps/hr solo; EXPO-FT's ~60-130-episode regime = an afternoon.
+**When 5090 SSH arrives:** async actor (train_pi_robo_async.py) = sim (~10GB) + π0.5 inference (~8GB) on 5090;
+learner solo here w/ XLA 0.9 + utd 20.
+
 **Training launch command (once conversion done; server first, then learner):**
 ```bash
 # terminal 1 (behavior env):
