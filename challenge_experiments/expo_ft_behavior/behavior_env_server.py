@@ -274,6 +274,14 @@ class BehaviorEnvOps:
 # executes ops sequentially (RL rollout is sequential anyway).
 def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
     if op == "create_env":
+        # OmniGibson is a singleton (one scene per process): create_env is
+        # IDEMPOTENT. A learner restart reuses the warm env instead of trying
+        # to load a second scene ("Simulator must be stopped before loading
+        # scene!"). The learner resets right after create_env anyway.
+        if state:
+            env_id, env = next(iter(state.items()))
+            logger.info(f"create_env: reusing existing env {env_id} (task={env.task_name})")
+            return {"env_id": env_id, "task_description": env.task_description}
         # EXPO-FT's train_pi_robo.py sends {example_action, env_usage, video_dir}
         # (see its train_env_creation_request) — task selection is SERVER-side
         # (CLI args), mirroring how their DROID ops server is task-configured.

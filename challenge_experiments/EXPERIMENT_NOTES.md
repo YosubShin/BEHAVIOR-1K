@@ -397,9 +397,48 @@ satisfied/total would have diverged from the leaderboard metric.
 (Ops lesson: pkill -f from inside a launcher can match the launcher itself → v3's first "result" was v2's stale
 log; watchers now verify a banner line before trusting logs.)
 
-Next (Phase 0 remaining): task config for train_pi_robo.py (mirror configs/task/light2.py → point at our server),
-offline replay-buffer seeding from our LeRobot demos (their loop expects base_image/left_wrist_image/state/actions),
-SFT init = our provided pi05 ckpt + its norm stats, then short vanilla run on turning_on_radio.
+**Phase 0 wiring COMPLETE (2026-07-09), all validated:**
+- Server create_env matches train_pi_robo's request ({example_action,env_usage,video_dir}); task via server CLI.
+- `convert_demos_to_expoft.py`: LeRobot v3 → per-episode traj.hdf5. Validated: (T,224²,3) uint8 ×3 cams,
+  state (T,23), action/joint_full(T,23)+gripper_empty(T,0) → loader concat (T,23) (no loader fork needed).
+  ~435 MB/ep; radio eps ~2k steps. Full 20-ep set → /mnt/nvme/expoft_demos/turning_on_radio.
+- openpi fork (/mnt/nvme/expo-ft/expo_ft/agents/vla/openpi): added `b1k_policy.py` (B1KInputs, 23-dim state as-is)
+  + `B1KExpoDataConfig` + TrainConfig `expo_pi05_b1k_joint_state` (pi05, action_dim 32, horizon 32).
+  **CPU-validated**: config resolves, provided ckpt's norm_stats load from bundled assets, fake transition composes
+  through repack→B1KInputs→Normalize→model transforms → buffer schema (state(32,), actions(32,32), 3×224², prompt(200)).
+- expo-ft configs: `configs/task/behavior_radio.py` (env_type sim, action_space joint_full/empty, control_hz 1000
+  = no pacing sleep), `configs/model/expo_ft_b1k_config.py` (b1k TrainConfig name, ckpt params path, assets dir/id,
+  freeze encoder).
+
+## 🎉 RUN V0 LIVE (2026-07-09 06:09) — EXPO-FT training on BEHAVIOR
+
+After 4 integration fixes, the full loop runs: **~9.7 env-steps/s** in the main rollout loop (incl. 16-candidate
+π0.5 sampling every 8 steps), agent = π0.5-LoRA + residual actor + REDQ(10), GPU 83 GB (learner ~70 + sim ~13).
+Debug ledger (each found by iterating, all now fixed):
+1. checkpoint dir exists → `--overwrite` needed on fresh runs.
+2. full-finetune π0.5 train state OOM @0.55×96GB → **LoRA TrainConfig** `expo_pi05_b1k_joint_state_lora`
+   (mirrors their DROID reference; provided ckpt = frozen base) + XLA 0.7.
+3. learner restart → 2nd create_env crashed singleton sim → **idempotent create_env** (reuses warm env; env
+   `5dce4c4e` survived across learner restarts — scene load amortized).
+4. offline demos lack `prompt` → repack KeyError (v0.3's "silent" death = same bug, traceback lost to my
+   log rotation) → buffer `insert()` injects task_description as fallback prompt (avoids reconverting 8.6GB).
+Ops lessons: watchers MUST treat process-death as terminal (pattern-only watchers sleep through silent kills);
+pgrep patterns match wrapper shells — verify the actual python pid; PYTHONFAULTHANDLER=1 on every learner run.
+Cadence: ~5.5 min/episode (3225 steps), updates gate at 10 online episodes (~1 hr), then 50 updates/episode.
+Logs: `v0_learner.log`, `v0_env_server.log`. Checkpoints: `/mnt/nvme/expoft_runs/expoft_b1k_radio_v0/`.
+
+**Training launch command (once conversion done; server first, then learner):**
+```bash
+# terminal 1 (behavior env):
+OMNIGIBSON_DATA_PATH=/mnt/nvme/behavior_data OMNIGIBSON_HEADLESS=1 \
+python challenge_experiments/expo_ft_behavior/behavior_env_server.py --port 8102 \
+  --task-name turning_on_radio --instance-ids 0 1 2 3 4 --perturb-pose
+# terminal 2 (expo-ft venv, WANDB_MODE=offline unless logged in):
+cd /mnt/nvme/expo-ft && .venv/bin/python train_pi_robo.py \
+  --config configs/model/expo_ft_b1k_config.py --config_task configs/task/behavior_radio.py \
+  --dataset_path /mnt/nvme/expoft_demos/turning_on_radio \
+  --run_name expoft_b1k_radio_v0 --replan_steps 8 --batch_size 64 --utd_ratio 20
+```
 
 ## Key file references
 
