@@ -309,6 +309,7 @@ class BehaviorEnvOps:
             logger.warning("spawn-view dump failed", exc_info=True)
 
         self._snap_ring = []
+        self._ep_frames = []
         self._episode_uid += 1
         self._steps = 0
         self._snapshot_initial_predicates()
@@ -423,7 +424,41 @@ class BehaviorEnvOps:
                 self._snap_ring.append((self._steps, og.sim.dump_state(serialized=False)))
             if self._done and self._success:
                 self._persist_snapshots()
+
+        # Episode video (head cam, 224²): buffer every step, write on episode end.
+        # Keeps ALL successes + the most recent failures (spot-checking rollouts).
+        try:
+            self._ep_frames.append(self._observation()["base_image"])
+            if self._done:
+                self._write_episode_video()
+        except Exception:
+            logger.warning("episode video failed", exc_info=True)
         return {"action": a, "action_type": "policy"}
+
+    _ep_frames: list = []
+    _VIDEO_DIR = "/mnt/nvme/expoft_videos/miniradio"
+    _KEEP_FAILS = 30
+
+    def _write_episode_video(self) -> None:
+        import glob
+        import os
+
+        import cv2
+
+        os.makedirs(self._VIDEO_DIR, exist_ok=True)
+        tag = "success" if self._success else "fail"
+        path = f"{self._VIDEO_DIR}/ep{self._episode_uid:05d}_{tag}_{self._steps}steps.mp4"
+        w = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 30, (224, 224))
+        for fr in self._ep_frames:
+            w.write(cv2.cvtColor(fr, cv2.COLOR_RGB2BGR))
+        w.release()
+        self._ep_frames = []
+        if self._success:
+            logger.info(f"episode video (SUCCESS): {path}")
+        else:  # prune old failure videos beyond the retention window
+            fails = sorted(glob.glob(f"{self._VIDEO_DIR}/ep*_fail_*.mp4"))
+            for old in fails[: -self._KEEP_FAILS]:
+                os.remove(old)
 
     def _persist_snapshots(self) -> None:
         """On success, save the buffered states from `snapshot_window` steps before the end."""
