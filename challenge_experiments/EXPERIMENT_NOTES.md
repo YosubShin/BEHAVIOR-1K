@@ -464,6 +464,22 @@ episodes → tens of eps/hr solo; EXPO-FT's ~60-130-episode regime = an afternoo
 **When 5090 SSH arrives:** async actor (train_pi_robo_async.py) = sim (~10GB) + π0.5 inference (~8GB) on 5090;
 learner solo here w/ XLA 0.9 + utd 20.
 
+## Overnight collection outcome + MINI-RADIO V1 LAUNCH (2026-07-09)
+
+Collection run: **0 successes in ~13 full-length episodes** on TRAIN instances 0–4 (w/ pose perturbation) →
+snapshot pool empty. Either bad luck (13 eps @10-15% → 12-25% chance of zero) or train instances are harder
+than the test split we measured. Superseded by the deterministic fallback: **`--start-near-object`** (hand-placed
+start: teleport base `start_distance`±0.05m in front of the named task-scope object, approach direction biased
+to the original spawn side ±30° [avoids clipping into walls/furniture], facing jitter ±7.5°, settle+keep_still).
+Added render ticks after both teleport paths — `step_physics()` doesn't render, first obs would ship stale
+pre-teleport camera frames.
+
+**Mini-radio v1 RUNNING:** server `--start-near-object radio --max-steps 450` (no perturb-pose — placement has
+its own jitter; snapshot recording ON → successes now also bank pre-success states for reset-to-failure later).
+Learner `expoft_b1k_miniradio_v1`: dataset = mini450 trimmed demos, **num_updates 15** (scaled from 50: sized
+for 3225-step episodes; 15×10utd×32batch ≈ effective paper-UTD ~10 on 450-step episodes — closer to EXPO-FT's
+regime; 50 would be UTD ~35, overhot + slow). First readout = base success rate over 20 mini-episodes.
+
 **Training launch command (once conversion done; server first, then learner):**
 ```bash
 # terminal 1 (behavior env):

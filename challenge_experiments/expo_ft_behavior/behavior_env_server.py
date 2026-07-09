@@ -270,6 +270,10 @@ class BehaviorEnvOps:
             # settle briefly so contacts/velocities are consistent
             for _ in range(5):
                 og.sim.step_physics()
+            # step_physics does NOT render — refresh frames or the first obs
+            # ships stale pre-teleport camera images.
+            for _ in range(3):
+                og.sim.render()
             obs, _ = self.env.get_obs()
             self.evaluator.obs = self.evaluator._preprocess_obs(obs)
 
@@ -339,6 +343,8 @@ class BehaviorEnvOps:
         for _ in range(5):
             og.sim.step_physics()
             self.robot.keep_still()
+        for _ in range(3):
+            og.sim.render()  # refresh camera frames post-teleport (physics steps don't render)
         obs, _ = self.env.get_obs()
         self.evaluator.obs = self.evaluator._preprocess_obs(obs)
 
