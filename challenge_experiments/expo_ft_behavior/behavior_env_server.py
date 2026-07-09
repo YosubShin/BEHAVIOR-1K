@@ -104,6 +104,7 @@ class BehaviorEnvOps:
         start_snapshot_dir: str | None = None,
         start_near_object: str | None = None,
         start_distance: float = 0.6,
+        start_joint_states: str | None = None,
     ):
         self.task_name = task_name
         self.instance_ids = instance_ids
@@ -169,6 +170,12 @@ class BehaviorEnvOps:
         # independent of base-policy success rate, unlike the snapshot pool.
         self._start_near_object = start_near_object
         self._start_distance = start_distance
+        # Optional pool of 23-dim demo start states: sampled at reset to put trunk/
+        # arms/grippers into the demos' manipulation posture (neutral reset pose is
+        # out-of-distribution for trimmed mini-demos -> policy never engages).
+        self._start_joint_states = np.load(start_joint_states) if start_joint_states else None
+        if self._start_joint_states is not None:
+            logger.info(f"start joint-state pool: {self._start_joint_states.shape}")
 
         self._start_snaps: list[str] = []
         if start_snapshot_dir:
@@ -324,6 +331,10 @@ class BehaviorEnvOps:
             )
         obj_pos, _ = target.get_position_orientation()
         robot_pos, _ = self.robot.get_position_orientation()
+        logger.info(
+            f"place_near: matched '{inst}' at {[round(float(x),2) for x in obj_pos]}, "
+            f"robot spawn at {[round(float(x),2) for x in robot_pos]}"
+        )
 
         d = self._start_distance + float(self._rng.uniform(-0.05, 0.05))
         # Approach from the side of the task's original robot spawn (guaranteed free
@@ -339,14 +350,33 @@ class BehaviorEnvOps:
         new_pos = th.tensor([base_x, base_y, float(robot_pos[2])])
         new_quat = T.euler2quat(th.tensor([0.0, 0.0, yaw]))
         self.robot.set_position_orientation(new_pos, new_quat)
+
+        if self._start_joint_states is not None:
+            # 23-dim state -> joint targets. State: [base_qvel 0:3, trunk 3:7,
+            # left_arm 7:14, left_grip_width 14, right_arm 15:22, right_grip_width 22].
+            # Robot joint vector (r1pro.yaml): 6 virtual base, 4 torso (6:10),
+            # 7 left arm (10:17), 7 right arm (17:24), 2 L-fingers (24:26), 2 R (26:28).
+            js = self._start_joint_states[int(self._rng.integers(len(self._start_joint_states)))]
+            jp = self.robot.get_joint_positions()
+            jp[6:10] = th.tensor(js[3:7])
+            jp[10:17] = th.tensor(js[7:14])
+            jp[17:24] = th.tensor(js[15:22])
+            jp[24:26] = float(js[14]) / 2.0
+            jp[26:28] = float(js[22]) / 2.0
+            self.robot.set_joint_positions(jp)
+
         og.sim.update_handles()
         for _ in range(5):
             og.sim.step_physics()
             self.robot.keep_still()
-        for _ in range(3):
-            og.sim.render()  # refresh camera frames post-teleport (physics steps don't render)
+        # 10+ renders: temporal AA/denoise needs several frames to flush ghosting
+        # after a teleport; 3 was visibly insufficient.
+        for _ in range(10):
+            og.sim.render()
         obs, _ = self.env.get_obs()
         self.evaluator.obs = self.evaluator._preprocess_obs(obs)
+        fp, _ = self.robot.get_position_orientation()
+        logger.info(f"place_near: final robot pos {[round(float(x),2) for x in fp]} (target d={self._start_distance})")
 
     def step(self, action: list) -> dict:
         a = np.asarray(action, dtype=np.float32)
@@ -438,6 +468,7 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
             start_snapshot_dir=server_cfg["start_snapshot_dir"],
             start_near_object=server_cfg["start_near_object"],
             start_distance=server_cfg["start_distance"],
+            start_joint_states=server_cfg["start_joint_states"],
         )
         env_id = str(uuid.uuid4())[:8]
         state[env_id] = env
@@ -481,8 +512,9 @@ def main():
     p.add_argument("--full-res", action="store_true", help="render 720/480 RGBD (eval-faithful, ~2x slower)")
     p.add_argument("--snapshot-record-dir", default=None, help="record pre-success sim states here")
     p.add_argument("--start-snapshot-dir", default=None, help="mini-task mode: reset from these snapshots")
-    p.add_argument("--start-near-object", default=None, help="mini-task: teleport base near this task object (e.g. radio)")
+    p.add_argument("--start-near-object", default=None, help="teleport base in front of this task-scope object")
     p.add_argument("--start-distance", type=float, default=0.6)
+    p.add_argument("--start-joint-states", default=None, help=".npy pool of 23-dim demo start states for trunk/arm/gripper pose")
     args = p.parse_args()
     server_cfg = {
         "task_name": args.task_name,
@@ -496,6 +528,7 @@ def main():
         "start_snapshot_dir": args.start_snapshot_dir,
         "start_near_object": args.start_near_object,
         "start_distance": args.start_distance,
+        "start_joint_states": args.start_joint_states,
     }
 
     request_q: "queue.Queue" = queue.Queue()
