@@ -427,6 +427,19 @@ pgrep patterns match wrapper shells — verify the actual python pid; PYTHONFAUL
 Cadence: ~5.5 min/episode (3225 steps), updates gate at 10 online episodes (~1 hr), then 50 updates/episode.
 Logs: `v0_learner.log`, `v0_env_server.log`. Checkpoints: `/mnt/nvme/expoft_runs/expoft_b1k_radio_v0/`.
 
+**v0.6 STEADY STATE (2026-07-09 08:35):** survived the full cycle — rollout → 50 update rounds (critic TD +
+π0.5-LoRA BC + residual SAC) → rollout resumed. Fix #5: update-phase OOM (20.5GB alloc; total batch 64×20=1280
+materialized+augmented at once + π0.5 TD-target sampling inside critic update) → batch 32 × utd 10 (= 4× smaller
+total, but NOTE: utd 20→10 is an ALGORITHMIC weakening vs repo default; batch_split/encode_batch_split=2 are the
+memory-free knobs — for v1 restore utd 20 via bigger splits or per-minibatch augmentation).
+VRAM ledger (measured): learner 73.6→88GB during updates (π0.5 weights ×3 copies ≈20GB: train/target/infer-cache;
+critic weights <1GB — encoder shared, only MLP heads ×10; killer = update activations incl. VLA sampling inside
+TD targets). Sim 12.2GB. Learner RSS 94GB system RAM (replay buffers ≈16GB×2 live in RAM). Sim CPU ~11 cores.
+Rollout ~9.7 env-steps/s ≈ 3× slower than real time (episode 107.5s sim = ~5.5min wall).
+Fast-obs change committed (native-224 render + 224 shipping, ~1.5-2× expected) — takes effect NEXT restart;
+NOTE confound: native-224 vs downsampled-224 shifted eval successes in our wrapper A/B — fix one obs mode per
+controlled experiment (--full-res flag exists).
+
 **Training launch command (once conversion done; server first, then learner):**
 ```bash
 # terminal 1 (behavior env):
