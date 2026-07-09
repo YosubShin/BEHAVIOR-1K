@@ -308,6 +308,18 @@ class BehaviorEnvOps:
         except Exception:
             logger.warning("spawn-view dump failed", exc_info=True)
 
+        # Force the goal object un-toggled at every reset: ToggledOn is a functional
+        # state that can leak across episodes (observed: instant 'success' at step 1-2)
+        # and is not reliably covered by state restore.
+        try:
+            from omnigibson.object_states import ToggledOn
+
+            for inst, entity in self.env.task.object_scope.items():
+                if entity is not None and hasattr(entity, "states") and ToggledOn in getattr(entity, "states", {}):
+                    entity.states[ToggledOn].set_value(False)
+        except Exception:
+            logger.warning("toggled_on reset failed", exc_info=True)
+
         self._snap_ring = []
         self._ep_frames = []
         self._episode_uid += 1
@@ -445,6 +457,11 @@ class BehaviorEnvOps:
 
         import cv2
 
+        # The learner sends 1-2 extra steps after done (its done-check lags one op);
+        # each re-triggers 'done' — only write the first, real episode video.
+        if len(self._ep_frames) < 5:
+            self._ep_frames = []
+            return
         os.makedirs(self._VIDEO_DIR, exist_ok=True)
         tag = "success" if self._success else "fail"
         path = f"{self._VIDEO_DIR}/ep{self._episode_uid:05d}_{tag}_{self._steps}steps.mp4"
