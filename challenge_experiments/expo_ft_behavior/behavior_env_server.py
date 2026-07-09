@@ -272,15 +272,19 @@ class BehaviorEnvOps:
 # So: websockets.sync.server handler threads only do wire I/O and hand each
 # request to the main thread over a queue; the main thread owns the sim and
 # executes ops sequentially (RL rollout is sequential anyway).
-def _execute_op(op: str, req: dict, state: dict) -> dict:
+def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
     if op == "create_env":
+        # EXPO-FT's train_pi_robo.py sends {example_action, env_usage, video_dir}
+        # (see its train_env_creation_request) — task selection is SERVER-side
+        # (CLI args), mirroring how their DROID ops server is task-configured.
+        # Request fields may override server defaults when present (smoke tests).
         env = BehaviorEnvOps(
-            task_name=req["task_name"],
-            instance_ids=req.get("instance_ids", [0]),
-            max_steps=req.get("max_steps"),
-            dense_reward=req.get("dense_reward", True),
-            perturb_pose=req.get("perturb_pose", False),
-            seed=req.get("seed", 0),
+            task_name=req.get("task_name", server_cfg["task_name"]),
+            instance_ids=req.get("instance_ids", server_cfg["instance_ids"]),
+            max_steps=req.get("max_steps", server_cfg["max_steps"]),
+            dense_reward=req.get("dense_reward", server_cfg["dense_reward"]),
+            perturb_pose=req.get("perturb_pose", server_cfg["perturb_pose"]),
+            seed=req.get("seed", server_cfg["seed"]),
         )
         env_id = str(uuid.uuid4())[:8]
         state[env_id] = env
@@ -315,7 +319,21 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8102)
+    p.add_argument("--task-name", default="turning_on_radio")
+    p.add_argument("--instance-ids", type=int, nargs="+", default=[0, 1, 2, 3, 4])
+    p.add_argument("--max-steps", type=int, default=None, help="None = 1.5x mean human demo length")
+    p.add_argument("--sparse-reward", action="store_true", help="final partial credit only (default: dense delta)")
+    p.add_argument("--perturb-pose", action="store_true")
+    p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
+    server_cfg = {
+        "task_name": args.task_name,
+        "instance_ids": args.instance_ids,
+        "max_steps": args.max_steps,
+        "dense_reward": not args.sparse_reward,
+        "perturb_pose": args.perturb_pose,
+        "seed": args.seed,
+    }
 
     request_q: "queue.Queue" = queue.Queue()
 
@@ -336,7 +354,7 @@ def main():
     while True:  # main thread: owns the simulator
         op, req, resp_q = request_q.get()
         try:
-            resp = _execute_op(op, req, state)
+            resp = _execute_op(op, req, state, server_cfg)
         except Exception as e:
             logger.error(f"op '{op}' failed:\n{traceback.format_exc()}")
             resp = {"status": "error", "message": str(e)}
