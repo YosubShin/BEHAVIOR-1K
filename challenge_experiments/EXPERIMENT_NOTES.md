@@ -480,6 +480,25 @@ Learner `expoft_b1k_miniradio_v1`: dataset = mini450 trimmed demos, **num_update
 for 3225-step episodes; 15×10utd×32batch ≈ effective paper-UTD ~10 on 450-step episodes — closer to EXPO-FT's
 regime; 50 would be UTD ~35, overhot + slow). First readout = base success rate over 20 mini-episodes.
 
+## Mini-radio start-state debugging → EXACT STARTS (2026-07-09)
+
+Mini-v1 (hand-placed, 0.6m, neutral pose): **0/20**. Visual probe vs demo T-450 frame showed why: demos at that
+point are AT the table, trunk bent, arms raised over the radio; ours stood back with arms down — fully OOD.
+Iterations: demo-posture joint pool (--start-joint-states) + 0.35m + render ticks (teleports leave temporal-AA
+ghosting; step_physics doesn't render) → posture right but robot still not at a radio-on-table (instance-dependent
+object placement suspected). Isaac swallows our logger.info after launch — debug via probe images, not logs.
+
+**Solution: exact raw-state starts.** `2026-challenge-rawdata/task-0000` = 200 files × ~10MB, each with per-step
+SERIALIZED SIM STATES (state: (T+1, 623)). `extract_raw_snapshots.py`: load state at T-450 into our env
+(serialized load works despite partial scene — state covers task-relevant entities), verify episode mapping via
+action-stream equality vs converted demos (**20/20 True**; raw file id ≈ (lerobot_idx+1)×10 with gaps), save as
+dump_state dicts for --start-snapshot-dir. **Probe render ≈ demo frame (near pixel-identical).**
+By construction: start distribution == trimmed-demo distribution. Also = replay-based reset-to-ANY-state infra
+(reset-to-failure curricula now trivial: any timestep of any demo).
+
+**Mini-v2 RUNNING** (`expoft_b1k_miniradio_v2_exact`): 20 exact starts, instance 0, max 450 steps, num_updates 15.
+First readout: base success over 20 episodes.
+
 **Training launch command (once conversion done; server first, then learner):**
 ```bash
 # terminal 1 (behavior env):
@@ -506,3 +525,21 @@ cd /mnt/nvme/expo-ft && .venv/bin/python train_pi_robo.py \
 | Eval wrappers | `OmniGibson/omnigibson/eval/wrappers/` |
 | Default robot config (action_dim=23) | `OmniGibson/omnigibson/eval/r1pro.yaml` |
 | Raw-demo re-render | `OmniGibson/scripts/learning/replay_obs.py` |
+
+## 🔑 MINI-TASK WINDOW BUG FOUND (2026-07-09, Yosub's video observation) → v5
+
+Yosub spot-checked the mini-demo videos: the last 450 steps show the human PUTTING THE RADIO BACK — no toggle!
+Raw-reward analysis confirms: demo sequence = grasp (~T−730) → **toggle (~T−600)** → put back + idle (~600 steps).
+So T−450 start states were POST-SUCCESS worlds (radio in-hand, already toggled) and the 450-step trims taught
+put-down, not turn-on. 20/20 demos already grasping at T−450. Serialized restore evidently loses ToggledOn
+(no insta-successes) and likely the assisted-grasp constraint. BDDL goal is ONLY `toggled_on`; put-back = style.
+Explains v4/v4b zeros completely. LESSON: spot-check data windows visually before training on them.
+
+**v5 (running):** starts = raw state at grasp_onset−60 (radio on table, off, grippers open — clean restore);
+demos = core trims [onset−60, toggle+30]: 20 segments, len 128/224/427 — the skill is ~7.5 s median!
+Episodes end AT the toggle (PredicateGoal terminates on success) so put-back never needed; max-steps 675.
+Boundaries: grasp onset = left-gripper width (state dim 14) < 0.02; toggle = first raw reward > 0.5.
+Artifacts: /mnt/nvme/expoft_snapshots/demo_starts_pregrasp + /mnt/nvme/expoft_demos/turning_on_radio_core.
+Rollout videos now recorded per episode (/mnt/nvme/expoft_videos/miniradio, all successes + last 30 fails);
+demo reference videos in /mnt/nvme/expoft_videos/demos. Docs' annotations folder is ABSENT upstream —
+base_qvel/gripper boundaries are the label-free substitute.
