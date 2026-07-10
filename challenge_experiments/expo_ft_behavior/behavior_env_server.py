@@ -256,7 +256,7 @@ class BehaviorEnvOps:
         }
 
     # ---- the 5 ops ---------------------------------------------------------
-    def reset(self) -> dict:
+    def reset(self, snapshot_path: str | None = None) -> dict:
         instance_id = self.instance_ids[self._instance_cursor % len(self.instance_ids)]
         self._instance_cursor += 1
 
@@ -266,10 +266,11 @@ class BehaviorEnvOps:
             self._perturb_robot_pose()
         self.evaluator.reset()
 
-        if self._start_snaps:
+        if self._start_snaps or snapshot_path:
             import torch as th
 
-            snap_path = self._start_snaps[int(self._rng.integers(len(self._start_snaps)))]
+            # snapshot_path (probe/debug): reset to a SPECIFIC snapshot instead of random.
+            snap_path = snapshot_path or self._start_snaps[int(self._rng.integers(len(self._start_snaps)))]
             state = th.load(snap_path, weights_only=False)
             import omnigibson as og
 
@@ -548,6 +549,8 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
         return {"env_id": env_id, "task_description": env.task_description}
     env = state[req["env_id"]]
     if op == "reset":
+        if req.get("snapshot_path"):
+            return env.reset(snapshot_path=req["snapshot_path"])
         return env.reset()
     if op == "step":
         return env.step(req["action"])
