@@ -134,7 +134,10 @@ class BehaviorEnvOps:
                 "partial_scene_load": True,
                 "max_steps": max_steps,
                 "write_video": False,
-                "mode": "train",  # TRAIN instances for RL — never the test split
+                # instance ids 301-320 live in the public_test split; <301 are train.
+                # (Comparison probes against serve-eval need the test split; RL runs
+                # stay on train.) Mixed train/test id lists are not supported.
+                "mode": "public_test" if min(int(i) for i in instance_ids) >= 301 else "train",
                 "seed": seed,
                 "task": {"name": task_name},
                 "robot": None,
