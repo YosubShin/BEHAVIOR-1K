@@ -641,3 +641,15 @@ Lesson: NEVER date features with git -S in a shallow clone; check the GitHub API
 wander-away may have been the execution bug, not the states. Revisit demo-state starts with the fixed pipeline
 after ≥1 policy success. Plan of record unchanged: v17 to 30-ep verdict → SFT back on → mini-task from
 policy-own snapshots, THEN re-test demo-state starts as a controlled comparison.
+
+## ✅ MILESTONE: expo stack validated against serve (2026-07-10)
+
+User compared v17 failures vs yesterday's serve-eval failures (301/304/309): **"they look the same."**
+Both reach the radio, extend the arm, and hover without committing the gripper. Action path audited bit-identical
+(B1KOutputs = pure truncation in both forks; eval ws client passes raw actions; same env.step). Conclusion:
+reach-and-dither is the CHECKPOINT's dominant failure mode (~80-90% on both stacks), not an adapter bug.
+Consistent with demo structure: operators nudge the toggle, no decisive grasp — BC dithers at the commitment point.
+The RL thesis writes itself from here: dense-reward RFT/residual should specifically fix the last-centimeter
+commitment. Next: v17 to 30-ep verdict (expect ~1-3 successes on train instances) → pre-success snapshots →
+v18 with SFT ON (now training deltas consistent with inference) → mini-task from policy-own snapshots →
+residual+critic.
