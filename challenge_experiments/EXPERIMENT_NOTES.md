@@ -635,3 +635,9 @@ FIX (three layers, mirrors serve exactly):
 Norm fix (mean/std) unchanged. **v17 (running): pristine probe, replan 16, num_updates 0** — this is now a true
 serve replica through the expo stack. Success bar: smooth + arms extend at the table + ~serve-level successes.
 Lesson: NEVER date features with git -S in a shallow clone; check the GitHub API or unshallow first.
+
+**Correction (user, 2026-07-10 morning): "restored states are OOD" is overstated.** All restored-start runs
+(v7-v14) executed through the broken action pipeline (zero-pinned arms / mean-state posture corruption) — the
+wander-away may have been the execution bug, not the states. Revisit demo-state starts with the fixed pipeline
+after ≥1 policy success. Plan of record unchanged: v17 to 30-ep verdict → SFT back on → mini-task from
+policy-own snapshots, THEN re-test demo-state starts as a controlled comparison.
