@@ -724,3 +724,17 @@ TRUE state through output transforms, (3) replan 16, (4) eval-parity resets (no 
 Snapshots: pool now includes states from the EXPO policy's own successful trajectory.
 NEXT: v18 to 20 eps for the rate → v19 = SFT ON (num_updates 30, delta-consistent training) → watch for
 v15-style degradation (now diagnosable: pipeline is trusted) → mini-task from policy-own snapshots → residual.
+
+## v19 MINI-TASK LAUNCH — the actual EXPO-FT experiment begins (2026-07-10 night)
+
+Full-pool spawn-check (45 states, user-verified sheets): ep5/ep10 windows = all mid-carry (slow successes,
+nav-end precedes the 600-step window); **ep20 b596-b506 = verified PRE-GRASP** (base parked at table, radio
+upright, arm poised — user's requested regime). Contact at b476. Snapshot window widened 600→1500 for future
+slow successes.
+**v19 config:** starts = 4 pre-grasp states (miniradio_pregrasp_own, all from expo's own ep20 success on 308),
+max_steps 1200 (~2x the successful remainder), full-res, parity resets for the snapshot path (settle+toggle-force
+stay ON there — correct for restores), SFT ON (num_updates 30 after ep10), replan 16, N=1/n_edit 0 (residual off).
+Success bar: pristine-policy successes from pre-grasp starts at ≥ full-task rate (~10-20%), then SFT should
+push p(success) up — the first measurable EXPO-FT improvement. Watch: (a) AG not needed (pre-grasp avoids the
+restore-grasp issue entirely), (b) v15-style SFT degradation after ep10 (now diagnosable on a trusted stack).
+Pool caveat: single instance (308), single trajectory — diversity grows with each new success recorded.
