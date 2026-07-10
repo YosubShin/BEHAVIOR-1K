@@ -256,6 +256,32 @@ class BehaviorEnvOps:
             "prompt": self.task_description,
         }
 
+    def _settle_quiescent(self) -> None:
+        """Step physics until the robot stops ringing, then refresh the obs."""
+        import torch as th
+
+        import omnigibson as og
+
+        self.robot.keep_still()
+        for i in range(240):
+            og.sim.step_physics()
+            if i >= 10 and th.max(th.abs(self.robot.get_joint_velocities())).item() < 0.02:
+                break
+        else:
+            logger.warning(
+                "settle: not quiescent after 240 steps (max |qvel|=%.3f)",
+                th.max(th.abs(self.robot.get_joint_velocities())).item(),
+            )
+        # Drive targets may have been consumed during settling; re-pin them to
+        # the settled posture so the episode starts from a held pose.
+        self.robot.set_joint_positions(self.robot.get_joint_positions())
+        # step_physics does NOT render — refresh frames or the first obs ships
+        # stale pre-settle camera images.
+        for _ in range(3):
+            og.sim.render()
+        obs, _ = self.env.get_obs()
+        self.evaluator.obs = self.evaluator._preprocess_obs(obs)
+
     # ---- the 5 ops ---------------------------------------------------------
     def reset(self, snapshot_path: str | None = None) -> dict:
         instance_id = self.instance_ids[self._instance_cursor % len(self.instance_ids)]
@@ -286,33 +312,19 @@ class BehaviorEnvOps:
             # then drag the robot back (observed: arms lift + trunk pitches, head
             # dips, at episode start). Re-set targets to the restored positions.
             self.robot.set_joint_positions(self.robot.get_joint_positions())
-            # Settle until quiescent: restore-time interpenetration gets resolved
-            # by solver push-out impulses that ring through the stiff trunk drives
-            # (observed: head pitches up and oscillates at episode start). Zeroing
-            # velocities every step fights the solver and stores the energy, so
-            # only zero them once up front, then let the drives damp the rest and
-            # gate on measured joint speed. All of this happens before the first
-            # observation, so the policy never sees mid-bounce frames.
-            self.robot.keep_still()
-            for i in range(240):
-                og.sim.step_physics()
-                if i >= 10 and th.max(th.abs(self.robot.get_joint_velocities())).item() < 0.02:
-                    break
-            else:
-                print(f"[snapshot reset] WARNING: not quiescent after 240 steps "
-                      f"(max |qvel|={th.max(th.abs(self.robot.get_joint_velocities())).item():.3f})")
-            # Drive targets may have been consumed during settling; re-pin them to
-            # the settled posture so the episode starts from a held pose.
-            self.robot.set_joint_positions(self.robot.get_joint_positions())
-            # step_physics does NOT render — refresh frames or the first obs
-            # ships stale pre-teleport camera images.
-            for _ in range(3):
-                og.sim.render()
-            obs, _ = self.env.get_obs()
-            self.evaluator.obs = self.evaluator._preprocess_obs(obs)
 
         if self._start_near_object:
             self._place_robot_near_object()
+
+        # Settle to quiescence on EVERY reset (natural or snapshot) before the
+        # first observation. Reset/restore-time interpenetration gets resolved
+        # by solver push-out impulses that ring through the stiff trunk drives
+        # (observed on both paths: head pitches up and oscillates at episode
+        # start). Zeroing velocities every step fights the solver and stores
+        # the energy, so only zero them once up front, then let the drives
+        # damp the rest and gate on measured joint speed. The policy never
+        # sees mid-bounce frames.
+        self._settle_quiescent()
 
         # Spawn-view debug: dump the head-camera view at t=0 (ring of last 40)
         # to compare against the mini-demos' first frames.
