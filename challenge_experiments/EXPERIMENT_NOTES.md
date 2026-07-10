@@ -543,3 +543,22 @@ Artifacts: /mnt/nvme/expoft_snapshots/demo_starts_pregrasp + /mnt/nvme/expoft_de
 Rollout videos now recorded per episode (/mnt/nvme/expoft_videos/miniradio, all successes + last 30 fails);
 demo reference videos in /mnt/nvme/expoft_videos/demos. Docs' annotations folder is ABSENT upstream —
 base_qvel/gripper boundaries are the label-free substitute.
+
+## 🔑 THE PROMPT BUG + v8 pivot (2026-07-09 evening)
+
+v7 keyframes: policy BACKS AWAY from the table and wanders — from verified-valid radio-on-table starts.
+Root cause candidate found: **every env-server run ever (v0 collection AND all mini versions) sent the fallback
+prompt "turning on radio"**; the checkpoint trained with "Turn on the radio receiver that's on the table in the
+living room." (openpi TASK_REGISTRY). The only correct-prompt runs = serve_b1k evals = the only runs that ever
+succeeded (10–20%). v0's 0/13 collection is thus explained by the prompt, not task difficulty.
+v7b (correct prompt, same restored starts): STILL retreats — restored mid-demo states remain OOD for the policy
+(also: all radiorest starts spawn mid-turn, |base_qvel|≈0.15, yaw −0.15 — operators never stop moving).
+Replay probes: navend 1/5 (shortest horizon succeeded — execution layer validated end-to-end);
+radiorest 0/5 open-loop (drift with horizon; OmniGibson's own replay uses STATES not actions for this reason).
+Websocket probe hung twice (server main-thread wedge, unresolved); direct in-process probe works — use that.
+
+**v8 (running): back to natural task resets (TRO init, official spawn — the KNOWN-GOOD config) + correct prompt +
+snapshot recording → expect ~10–20% successes → snapshot pool from the POLICY'S OWN pre-success states
+(in-distribution by construction) → rebuild mini-task from those. num_updates 30, full demos, default 1.5× timeout.**
+Ops lesson of the day: pgrep/pkill/awk patterns inside launchers self-match their own cmdline (5+ incidents) —
+ALWAYS: separate calls: (1) list pids w/ bracketed patterns, (2) kill by number, (3) launch. And disown launchers.
