@@ -286,10 +286,24 @@ class BehaviorEnvOps:
             # then drag the robot back (observed: arms lift + trunk pitches, head
             # dips, at episode start). Re-set targets to the restored positions.
             self.robot.set_joint_positions(self.robot.get_joint_positions())
-            # settle briefly so contacts/velocities are consistent
-            for _ in range(5):
+            # Settle until quiescent: restore-time interpenetration gets resolved
+            # by solver push-out impulses that ring through the stiff trunk drives
+            # (observed: head pitches up and oscillates at episode start). Zeroing
+            # velocities every step fights the solver and stores the energy, so
+            # only zero them once up front, then let the drives damp the rest and
+            # gate on measured joint speed. All of this happens before the first
+            # observation, so the policy never sees mid-bounce frames.
+            self.robot.keep_still()
+            for i in range(240):
                 og.sim.step_physics()
-                self.robot.keep_still()
+                if i >= 10 and th.max(th.abs(self.robot.get_joint_velocities())).item() < 0.02:
+                    break
+            else:
+                print(f"[snapshot reset] WARNING: not quiescent after 240 steps "
+                      f"(max |qvel|={th.max(th.abs(self.robot.get_joint_velocities())).item():.3f})")
+            # Drive targets may have been consumed during settling; re-pin them to
+            # the settled posture so the episode starts from a held pose.
+            self.robot.set_joint_positions(self.robot.get_joint_positions())
             # step_physics does NOT render — refresh frames or the first obs
             # ships stale pre-teleport camera images.
             for _ in range(3):
