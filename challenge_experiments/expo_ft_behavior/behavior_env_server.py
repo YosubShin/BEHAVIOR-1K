@@ -96,6 +96,8 @@ class BehaviorEnvOps:
         max_steps: int | None = None,
         dense_reward: bool = True,
         perturb_pose: bool = False,
+        perturb_xy: float = 0.15,
+        perturb_yaw_deg: float = 15.0,
         seed: int = 0,
         full_res: bool = False,
         snapshot_record_dir: str | None = None,
@@ -112,6 +114,8 @@ class BehaviorEnvOps:
         self._instance_cursor = 0
         self.dense_reward = dense_reward
         self.perturb_pose = perturb_pose
+        self.perturb_xy = perturb_xy
+        self.perturb_yaw_deg = perturb_yaw_deg
         self._rng = np.random.default_rng(seed)
 
         # ---- launch sim (heavy). Reuses the challenge Evaluator config path.
@@ -297,6 +301,7 @@ class BehaviorEnvOps:
         self.evaluator.reset()
 
         used_snapshot = bool(self._start_snaps or snapshot_path)
+        # (snapshot restores overwrite the jitter above; re-applied post-restore below)
         if used_snapshot:
             import torch as th
 
@@ -316,6 +321,8 @@ class BehaviorEnvOps:
             # then drag the robot back (observed: arms lift + trunk pitches, head
             # dips, at episode start). Re-set targets to the restored positions.
             self.robot.set_joint_positions(self.robot.get_joint_positions())
+            if self.perturb_pose:
+                self._perturb_robot_pose()
 
         if self._start_near_object:
             self._place_robot_near_object()
@@ -371,13 +378,16 @@ class BehaviorEnvOps:
         return {"observation": self._observation(), "done": False}
 
     def _perturb_robot_pose(self):
-        """Comet-style start-pose jitter: x,y ±0.15 m, yaw ±15 deg."""
+        """Comet-style start-pose jitter (DART augmentation): x,y ±perturb_xy m,
+        yaw ±perturb_yaw_deg. For snapshot starts this is the mini-task difficulty
+        knob: jitter from a pre-grasp state forces the policy to re-solve the reach
+        geometry instead of replaying one memorized approach."""
         import omnigibson.utils.transform_utils as T
         import torch as th
 
         pos, quat = self.robot.get_position_orientation()
-        dx, dy = self._rng.uniform(-0.15, 0.15, size=2)
-        dyaw = self._rng.uniform(-np.pi / 12, np.pi / 12)
+        dx, dy = self._rng.uniform(-self.perturb_xy, self.perturb_xy, size=2)
+        dyaw = self._rng.uniform(-np.deg2rad(self.perturb_yaw_deg), np.deg2rad(self.perturb_yaw_deg))
         yaw_q = T.euler2quat(th.tensor([0.0, 0.0, dyaw]))
         new_quat = T.quat_multiply(quat, yaw_q)
         new_pos = pos + th.tensor([dx, dy, 0.0])
@@ -597,6 +607,8 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
             max_steps=req.get("max_steps", server_cfg["max_steps"]),
             dense_reward=req.get("dense_reward", server_cfg["dense_reward"]),
             perturb_pose=req.get("perturb_pose", server_cfg["perturb_pose"]),
+            perturb_xy=server_cfg.get("perturb_xy", 0.15),
+            perturb_yaw_deg=server_cfg.get("perturb_yaw_deg", 15.0),
             seed=req.get("seed", server_cfg["seed"]),
             full_res=req.get("full_res", server_cfg["full_res"]),
             snapshot_record_dir=server_cfg["snapshot_record_dir"],
@@ -654,6 +666,8 @@ def main():
     p.add_argument("--instance-ids", type=int, nargs="+", default=[0, 1, 2, 3, 4])
     p.add_argument("--max-steps", type=int, default=None, help="None = 1.5x mean human demo length")
     p.add_argument("--sparse-reward", action="store_true", help="final partial credit only (default: dense delta)")
+    p.add_argument("--perturb-xy", type=float, default=0.15, help="pose jitter magnitude, meters")
+    p.add_argument("--perturb-yaw-deg", type=float, default=15.0, help="pose jitter yaw, degrees")
     p.add_argument("--perturb-pose", action="store_true")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--full-res", action="store_true", help="render 720/480 RGBD (eval-faithful, ~2x slower)")
@@ -669,6 +683,8 @@ def main():
         "max_steps": args.max_steps,
         "dense_reward": not args.sparse_reward,
         "perturb_pose": args.perturb_pose,
+        "perturb_xy": args.perturb_xy,
+        "perturb_yaw_deg": args.perturb_yaw_deg,
         "seed": args.seed,
         "full_res": args.full_res,
         "snapshot_record_dir": args.snapshot_record_dir,
