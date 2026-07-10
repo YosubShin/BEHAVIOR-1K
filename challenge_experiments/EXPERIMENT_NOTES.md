@@ -743,3 +743,12 @@ Pool caveat: single instance (308), single trajectory — diversity grows with e
 The checkpoint's grasp→toggle skill was strong all along; full-task failures were navigation/approach-geometry.
 Ideal RFT regime: success-rich buffer + measurable headroom. SFT engages at ep11 — metric of record: post-SFT
 rate vs this baseline (and NO v15-style degradation).
+
+## v20 jittered mini-task (2026-07-11): the calibrated experiment
+
+User call: 8/10 pristine (v19) = too easy for RL. Difficulty knob = DART-style pose jitter applied AFTER
+snapshot restore (was silently overwritten before — fixed), flags --perturb-xy/--perturb-yaw-deg.
+Config: pre-grasp starts + jitter ±0.10m/±12°, max_steps 900 (speed: successes cluster 600-900).
+**Jittered pristine baseline (eps 1-10): 6/10** — target band achieved. Failure mode: timeouts (reach
+geometry unsolved from offset starts). SFT engaged ep11+; first SFT episode: success @599 (fastest yet).
+Metric of record: SFT-phase success rate vs 6/10.
