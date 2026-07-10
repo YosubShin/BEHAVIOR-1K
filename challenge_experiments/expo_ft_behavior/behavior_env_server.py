@@ -281,10 +281,12 @@ class BehaviorEnvOps:
                 og.sim.load_state(state["serialized_state"], serialized=True)
             else:
                 og.sim.load_state(state, serialized=False)
-            # settle briefly so contacts/velocities are consistent. keep_still the
-            # robot each step: raw step_physics runs NO controllers, so without it
-            # the arms sag under gravity and the first action chunk snaps them back
-            # up (observed as a fast arm-lift artifact at episode start).
+            # CRITICAL: load_state restores joint POSITIONS but not the position-
+            # drive TARGETS, which still point at the reset posture — the drives
+            # then drag the robot back (observed: arms lift + trunk pitches, head
+            # dips, at episode start). Re-set targets to the restored positions.
+            self.robot.set_joint_positions(self.robot.get_joint_positions())
+            # settle briefly so contacts/velocities are consistent
             for _ in range(5):
                 og.sim.step_physics()
                 self.robot.keep_still()
