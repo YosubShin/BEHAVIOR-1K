@@ -100,7 +100,7 @@ class BehaviorEnvOps:
         full_res: bool = False,
         snapshot_record_dir: str | None = None,
         snapshot_every: int = 30,
-        snapshot_window: tuple[int, int] = (150, 600),
+        snapshot_window: tuple[int, int] = (150, 1500),
         start_snapshot_dir: str | None = None,
         start_near_object: str | None = None,
         start_distance: float = 0.6,
