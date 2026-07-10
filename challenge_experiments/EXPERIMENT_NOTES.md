@@ -611,3 +611,27 @@ NATURAL resets (ep10) → settle-to-quiescence now runs on every reset, not just
 natural resets.** If smooth + serve-level successes (~10-20%) over ~30 eps → entire expo adapter/inference
 stack validated; isolated culprit = SFT recipe (suspects: LoRA lr, 20-demo overfit at 30 updates/ep,
 action-padding/masking). If still jerky → residual inference-path bug.
+
+## 🔑🔑 THE REAL DELTA STORY — shallow-clone archaeology burned us (2026-07-10 ~07:30)
+
+v16 pristine probe: 0/30, wrist cams show ARMS NEVER LEAVE REST POSTURE all episode (base navigates fine).
+That signature broke the case open:
+- The "checkpoint predates delta feature" conclusion (yesterday) was WRONG — /mnt/nvme/openpi is a depth-1
+  clone, so `git log -S` attributed the whole repo to the one visible merge commit. GitHub API on wensi-ai/openpi:
+  the delta feature existed by cb7d32d0 (2026-06-08) and the checkpoint-training commit 03eaee33
+  ("pi05 for 2026", 2026-06-25) has LeRobotB1KDataConfig extra_delta_transform=True.
+  **The checkpoint IS delta-trained** (torso 3:7, arms 7:14/15:22 vs matching state slices; base+grippers absolute).
+- Why v11-13 flew arms UP: expo's process_transformed_outputs fed a DUMMY ZERO state into the output chain
+  [Unnormalize, MappedAbsoluteActions, B1KOutputs]. Unnormalize(0) = MEAN state, so the pipeline added the mean
+  posture — then my call-site helper added the TRUE state again = DOUBLE-ADD ≈ 2× posture. Arm fly-up + head-down.
+- Why v14-16 pinned arms at rest: my revert removed delta entirely → true deltas (≈0) executed as absolute
+  position targets ≈ zero posture. Base dims are velocities (absolute) → nav OK, manipulation dead. Matches
+  v15 ep18 (reaches table, arms never extend) and v16 wrist cams exactly.
+FIX (three layers, mirrors serve exactly):
+1. config.py: delta transforms restored (same mappings as 03eaee33).
+2. pi05.py process_transformed_outputs(normalized_state=...): true normalized state instead of dummy zeros —
+   Unnormalize restores raw state, MappedAbsoluteActions adds it ONCE.
+3. expo_ft.py + bc.py call sites pass transformed_inputs["state"].
+Norm fix (mean/std) unchanged. **v17 (running): pristine probe, replan 16, num_updates 0** — this is now a true
+serve replica through the expo stack. Success bar: smooth + arms extend at the table + ~serve-level successes.
+Lesson: NEVER date features with git -S in a shallow clone; check the GitHub API or unshallow first.
