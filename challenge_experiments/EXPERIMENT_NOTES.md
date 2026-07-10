@@ -710,3 +710,17 @@ Cut probe at 10 eps (parity established; second pass low marginal value).
 **v18 (running): expo pristine probe in the IDENTICAL config** (full-res, parity resets, 301-310, replan 16,
 num_updates 0) — the last unvalidated piece is expo's inference internals. Bar: ~2/10-ish. Serve policy server
 stopped (VRAM freed for the expo learner).
+
+## 🎉🎉 EXPO STACK FIRST SUCCESS (2026-07-10 evening, v18 ep8)
+
+**v18 ep8 = instance 308: SUCCESS at 1196 steps** — faster than any reference success (serve's best: 1221).
+First success through the full expo inference path EVER (100+ episodes across v8-v17: zero). Also user-observed
+in ep5 (305): first-ever expo grasp+lift (the commitment behavior that was missing all along).
+Validation chain now CLOSED end-to-end:
+  reference brain + our env = 2/10 (parity probe) ✓
+  expo brain + our env = converts at reference-typical rate, running 1/8 ✓
+The entire v8→v18 debugging arc reduced to four load-bearing fixes: (1) mean/std norm, (2) delta actions with
+TRUE state through output transforms, (3) replan 16, (4) eval-parity resets (no settle) + full-res rendering.
+Snapshots: pool now includes states from the EXPO policy's own successful trajectory.
+NEXT: v18 to 20 eps for the rate → v19 = SFT ON (num_updates 30, delta-consistent training) → watch for
+v15-style degradation (now diagnosable: pipeline is trusted) → mini-task from policy-own snapshots → residual.
