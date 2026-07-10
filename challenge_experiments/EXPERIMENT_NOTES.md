@@ -686,3 +686,19 @@ embeddings/per-stage fine-tunes instead.
    OLD SFT recipe (delta-inconsistent then) degraded the policy; re-evaluate SFT with consistent pipeline in v18.
 6. Settle-to-quiescence needed on every reset (head-bounce transient on natural resets too).
 7. Restored demo-state starts: wander-away observed ONLY under the broken pipeline — OOD claim unproven, retest.
+
+## 🎉 FIRST SUCCESS THROUGH OUR ENV STACK (2026-07-10 afternoon, parity probe)
+
+**Parity probe ep5 = instance 305: SUCCESS at 2716 steps** (reference serve policy through our env server,
+full-res, strict eval-parity resets). 15 pre-success snapshots auto-recorded to miniradio_own — the
+policy-own mini-task pool EXISTS now.
+The isolating evidence: every config with my reset extras went a POOLED 0/18 (native 0/12 + full-res 0/6);
+removing settle/toggle-force converts within 5 episodes. **The settle loop was the suppressor** — the start
+transient is in-distribution (reference evals + demos both have it), and freezing the robot for up to 8s +
+re-pinning drive targets to a sagged posture pushed starts OFF-distribution. User's head-bounce report was
+correct observation, wrong villain: the bounce belongs there.
+Also: success on 305 (a serve-eval FAILURE instance) supports stochastic per-episode ~10-20% rather than
+fixed instance difficulty.
+Chain of custody for the env stack: obs (get_eval_obs) → serve policy → 23-dim actions → env.step, all
+byte-equivalent to the challenge harness. Remaining parity probe episodes will give the quantitative rate.
+NEXT: finish 20-ep parity probe → expo pristine full-res natural-reset (v18 probe) → if ~serve-level, SFT on.
