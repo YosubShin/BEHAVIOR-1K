@@ -702,3 +702,11 @@ fixed instance difficulty.
 Chain of custody for the env stack: obs (get_eval_obs) → serve policy → 23-dim actions → env.step, all
 byte-equivalent to the challenge harness. Remaining parity probe episodes will give the quantitative rate.
 NEXT: finish 20-ep parity probe → expo pristine full-res natural-reset (v18 probe) → if ~serve-level, SFT on.
+
+**Parity probe final: 2/10 (eps 5=305 @2716, 10=310 @2212) — EXACT match to yesterday's serve-eval reference.**
+Env stack quantitatively validated. Winning instances differ from yesterday (305/310 vs 306/308) → per-episode
+outcomes are stochastic, not fixed instance difficulty. Snapshot pool: 30 pre-success states from 2 successes.
+Cut probe at 10 eps (parity established; second pass low marginal value).
+**v18 (running): expo pristine probe in the IDENTICAL config** (full-res, parity resets, 301-310, replan 16,
+num_updates 0) — the last unvalidated piece is expo's inference internals. Bar: ~2/10-ish. Serve policy server
+stopped (VRAM freed for the expo learner).
