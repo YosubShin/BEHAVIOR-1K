@@ -580,3 +580,18 @@ Reverted: config delta push + expo_ft.py `_deltas_to_absolute` call sites (norm 
 drive-target fix at reset (still correct for snapshot loading). Watch: start posture stable + demo-like arm motion.
 Lesson: when adopting a fork's data config for a pre-existing checkpoint, date-check every feature flag against
 the checkpoint's training date (`git log -S <flag>`).
+
+## v14 verdict + v15 pivot (2026-07-10 ~01:00)
+
+**v14 (radiorest starts, fully-fixed pipeline): 0/25.** Frame analysis vs demo hdf5 ground truth:
+- Demo at radiorest boundary: robot AT table, head down, right arm extended AT radio, near-still for 3s, then grasp.
+- Snapshot pool is heterogeneous (grasp-while-driving): ~40% spawn hand-at-radio, ~30% mid-approach, ~30% facing away mid-turn.
+- **Damning case ep032: spawns hand-at-radio → policy immediately turns AWAY and wanders to kitchen for 1200 steps.**
+  Restored mid-demo states are behaviorally OOD even with correct actions/norm/prompt — v7's retreat, reproduced clean.
+- Start-posture artifact: GONE in v14 (arms start down, rise into a forward reach — matches demo phase). Delta-revert confirmed.
+
+**Reinterpretation: v8 (natural starts + correct prompt) failed only because of QUANTILE norm** — it predates the delta
+plumbing, so its actions were already correctly absolute. Natural starts with today's fully-fixed pipeline have never
+been tried → **v15 (running overnight): natural task resets, full demos dataset, num_updates 30, snapshot-record to
+miniradio_own.** Expect serve-level ~10-20% successes → policy-own pre-success snapshot pool → rebuild mini-task
+from states the policy actually visits.
