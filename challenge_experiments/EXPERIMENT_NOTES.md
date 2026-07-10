@@ -755,3 +755,18 @@ Metric of record: SFT-phase success rate vs 6/10.
 
 **v21 (jitter ±0.15m/±18°) pristine baseline: 4/10.** Difficulty ladder mapped: none=8/10, j10=6/10, j15=4/10 —
 a clean monotone dial. SFT engaged ep11+ vs the 40% baseline (best-contrast test of the recipe so far).
+
+## 🔑 THE SFT-DRIFT ROOT CAUSE: BC-ON-FAILURES (2026-07-11)
+
+v21 SFT phase: 0/6 post-update, and USER video verdict: degraded — base stuck mid-turn, gripper opening/closing
+in the air, right-gripper jerks (v15's disease, reproduced on the trusted stack with a 4/10 controlled baseline).
+**Root cause: `actor_success_only` was never set in our b1k config → train_pi_robo defaults it FALSE → the
+actor BC-trained on random replay minibatches = mostly FAILURE transitions.** Every update taught the policy
+to imitate its own dithering. The reference config (expo_ft_pi_config.py) sets it True — EXPO-FT's RFT is
+BC-on-successes BY DEFINITION; we were running an un-recipe.
+This also retroactively explains v15's post-ep10 jerkiness (that run had ~0 successes in buffer → actor BC'd
+on pure failure data + offline demos diluted 1:N).
+Fix: config.actor_success_only = True. **v22 (running): identical v21 setup (jitter-15, 4/10 pristine
+baseline) + success-only actor updates.** Metric: SFT-phase rate vs 4/10 with sane motion.
+Lesson: when adopting a method's reference config, DIFF EVERY FIELD against your derived config — silent
+defaults invert the algorithm.
