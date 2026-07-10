@@ -104,6 +104,7 @@ class BehaviorEnvOps:
         start_snapshot_dir: str | None = None,
         start_near_object: str | None = None,
         start_distance: float = 0.6,
+        prompt: str | None = None,
         start_joint_states: str | None = None,
     ):
         self.task_name = task_name
@@ -144,7 +145,7 @@ class BehaviorEnvOps:
         self.robot = self.evaluator.robot
         self._cam = self.evaluator.robot_camera_names  # {head,left_wrist,right_wrist}
 
-        self.task_description = self._load_prompt(task_name)
+        self.task_description = prompt or self._load_prompt(task_name)
         self._steps = 0
         self._prev_q = 0.0
         self._last_reward = 0.0
@@ -542,6 +543,7 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
             start_snapshot_dir=server_cfg["start_snapshot_dir"],
             start_near_object=server_cfg["start_near_object"],
             start_distance=server_cfg["start_distance"],
+            prompt=server_cfg.get("prompt"),
             start_joint_states=server_cfg["start_joint_states"],
         )
         env_id = str(uuid.uuid4())[:8]
@@ -580,6 +582,13 @@ def main():
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8102)
     p.add_argument("--task-name", default="turning_on_radio")
+    p.add_argument(
+        "--prompt",
+        default=None,
+        help="exact language instruction (must match the checkpoint's training prompt; "
+        "see openpi TASK_REGISTRY). Fallback derives from task name, which is OOD "
+        "for the provided checkpoints.",
+    )
     p.add_argument("--instance-ids", type=int, nargs="+", default=[0, 1, 2, 3, 4])
     p.add_argument("--max-steps", type=int, default=None, help="None = 1.5x mean human demo length")
     p.add_argument("--sparse-reward", action="store_true", help="final partial credit only (default: dense delta)")
@@ -604,6 +613,7 @@ def main():
         "start_snapshot_dir": args.start_snapshot_dir,
         "start_near_object": args.start_near_object,
         "start_distance": args.start_distance,
+        "prompt": args.prompt,
         "start_joint_states": args.start_joint_states,
     }
 
