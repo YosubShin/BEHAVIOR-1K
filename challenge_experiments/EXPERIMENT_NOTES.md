@@ -653,3 +653,36 @@ The RL thesis writes itself from here: dense-reward RFT/residual should specific
 commitment. Next: v17 to 30-ep verdict (expect ~1-3 successes on train instances) → pre-success snapshots →
 v18 with SFT ON (now training deltas consistent with inference) → mini-task from policy-own snapshots →
 residual+critic.
+
+## ROADMAP (agreed 2026-07-10): prove EXPO-FT on a short-horizon subtask FIRST
+
+**Now (plan of record):** demonstrate EXPO-FT works on ONE short-horizon target — the last-centimeter
+grasp/toggle that both stacks fail 80-90% of the time. Sequence: v17 pristine verdict (30 eps) → harvest
+pre-success snapshots on any success → v18 SFT-on (delta-consistent now) → mini-task from policy-own snapshots
+(revisit demo-state starts as a controlled comparison — the OOD claim is unproven post-fix) → residual + critic.
+
+**Future roadmap: semantic subtask decomposition** (navigate → reach → grasp → lift/toggle …). Rationale:
+1. π0.5's native recipe is hierarchical (predict subtask text → act on it), but the challenge checkpoint was
+   fine-tuned FLAT: dataset carries ONE task label per episode (verified: tasks.parquet = 100 whole-task rows,
+   no per-frame skill/phase columns).
+2. Externalized stage = fix for the Markovian limitation (can't tell "about to grasp" from "done"). 2025 #1
+   (Robot Learning Collective) validated the concern with "System 2" stage tracking + inference-time correction
+   rules — but via 50 learned task embeddings, NOT language subtasks. Language-subtask hierarchy = open territory.
+3. Per-stage EXPO-FT: privileged-predicate stage machine in sim (near-table → EEF-near-radio → IsGrasping →
+   ToggledOn), per-stage rewards, horizons of a few hundred steps — exactly EXPO-FT's regime. At eval (no
+   privileged state): learned stage classifier from obs, or π0.5's own high-level inference.
+**Cheap gating probe before investing:** `--prompt "pick up the radio receiver"` etc. for a few episodes —
+does the flat-fine-tuned checkpoint still steer by novel language? If not, stage-conditioning must enter via
+embeddings/per-stage fine-tunes instead.
+
+## Findings ledger (as of 2026-07-10 morning)
+1. Expo↔BEHAVIOR adapter VALIDATED end-to-end: v17 failures indistinguishable from serve-eval failures (user-confirmed).
+2. Checkpoint is delta-trained (torso/arms) + mean/std norm; output chain needs the true normalized state
+   (dummy-zero state silently becomes the MEAN state after Unnormalize).
+3. Serve executes 16-step receding horizon; match replan_steps=16.
+4. Dominant checkpoint failure mode: reaches radio, hovers, never commits the gripper (~80-90% both stacks) —
+   the precise commitment gap RFT/residual should close; ideal RL target.
+5. train_pi_robo only updates after ep 10 (eps 1-10 are always pristine) — v15's post-ep10 jerkiness says the
+   OLD SFT recipe (delta-inconsistent then) degraded the policy; re-evaluate SFT with consistent pipeline in v18.
+6. Settle-to-quiescence needed on every reset (head-bounce transient on natural resets too).
+7. Restored demo-state starts: wander-away observed ONLY under the broken pipeline — OOD claim unproven, retest.
