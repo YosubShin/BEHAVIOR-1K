@@ -296,7 +296,8 @@ class BehaviorEnvOps:
             self._perturb_robot_pose()
         self.evaluator.reset()
 
-        if self._start_snaps or snapshot_path:
+        used_snapshot = bool(self._start_snaps or snapshot_path)
+        if used_snapshot:
             import torch as th
 
             # snapshot_path (probe/debug): reset to a SPECIFIC snapshot instead of random.
@@ -319,15 +320,14 @@ class BehaviorEnvOps:
         if self._start_near_object:
             self._place_robot_near_object()
 
-        # Settle to quiescence on EVERY reset (natural or snapshot) before the
-        # first observation. Reset/restore-time interpenetration gets resolved
-        # by solver push-out impulses that ring through the stiff trunk drives
-        # (observed on both paths: head pitches up and oscillates at episode
-        # start). Zeroing velocities every step fights the solver and stores
-        # the energy, so only zero them once up front, then let the drives
-        # damp the rest and gate on measured joint speed. The policy never
-        # sees mid-bounce frames.
-        self._settle_quiescent()
+        # Settle to quiescence ONLY after snapshot restores. Natural resets must
+        # match the challenge eval byte-for-byte: the reference success rates
+        # (2/10 full-res) were measured WITH the start transient, and demos were
+        # collected the same way — the bounce is in-distribution, and settling
+        # (frozen robot + drive targets re-pinned to a sagged posture) makes our
+        # starts LESS like training.
+        if used_snapshot:
+            self._settle_quiescent()
 
         # Spawn-view debug: dump the head-camera view at t=0 (ring of last 40)
         # to compare against the mini-demos' first frames.
@@ -345,17 +345,19 @@ class BehaviorEnvOps:
         except Exception:
             logger.warning("spawn-view dump failed", exc_info=True)
 
-        # Force the goal object un-toggled at every reset: ToggledOn is a functional
-        # state that can leak across episodes (observed: instant 'success' at step 1-2)
-        # and is not reliably covered by state restore.
-        try:
-            from omnigibson.object_states import ToggledOn
+        # Force the goal object un-toggled after SNAPSHOT resets only: ToggledOn is
+        # a functional state not covered by load_state (observed leak: instant
+        # 'success' at step 1-2). Natural env.reset restores task init state itself,
+        # and the challenge eval does not force it — parity requires we don't either.
+        if used_snapshot:
+            try:
+                from omnigibson.object_states import ToggledOn
 
-            for inst, entity in self.env.task.object_scope.items():
-                if entity is not None and hasattr(entity, "states") and ToggledOn in getattr(entity, "states", {}):
-                    entity.states[ToggledOn].set_value(False)
-        except Exception:
-            logger.warning("toggled_on reset failed", exc_info=True)
+                for inst, entity in self.env.task.object_scope.items():
+                    if entity is not None and hasattr(entity, "states") and ToggledOn in getattr(entity, "states", {}):
+                        entity.states[ToggledOn].set_value(False)
+            except Exception:
+                logger.warning("toggled_on reset failed", exc_info=True)
 
         self._snap_ring = []
         self._ep_frames = []
