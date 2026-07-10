@@ -540,6 +540,21 @@ class BehaviorEnvOps:
     def get_observation(self) -> dict:
         return {"observation": self._observation()}
 
+    def get_eval_obs(self) -> dict:
+        """The evaluator's preprocessed obs — byte-for-byte what the challenge
+        eval client ships to a serve_b1k policy server. Lets an external probe
+        drive THIS env with the reference serve policy (obs-provenance A/B)."""
+        import torch as th
+
+        def to_np(x):
+            if isinstance(x, dict):
+                return {k: to_np(v) for k, v in x.items()}
+            if isinstance(x, th.Tensor):
+                return x.detach().cpu().numpy()
+            return x
+
+        return {"eval_obs": to_np(dict(self.evaluator.obs))}
+
     def get_info_for_step(self) -> dict:
         # mask: 0 on true terminal (success), 1 on truncation (bootstrap through)
         mask = 0.0 if self._success else 1.0
@@ -601,6 +616,8 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
         return env.step(req["action"])
     if op == "get_observation":
         return env.get_observation()
+    if op == "get_eval_obs":
+        return env.get_eval_obs()
     if op == "get_info_for_step":
         return env.get_info_for_step()
     return {"status": "error", "message": f"unknown operation {op}"}
