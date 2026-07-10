@@ -595,3 +595,19 @@ plumbing, so its actions were already correctly absolute. Natural starts with to
 been tried → **v15 (running overnight): natural task resets, full demos dataset, num_updates 30, snapshot-record to
 miniradio_own.** Expect serve-level ~10-20% successes → policy-own pre-success snapshot pool → rebuild mini-task
 from states the policy actually visits.
+
+## 🔑 SFT-drift hypothesis + v16 pristine probe (2026-07-10 ~03:00)
+
+User caught in v15 videos: ep10 smooth; ep18/19 jerky head+arms THROUGHOUT; start-bounce present even on
+NATURAL resets (ep10) → settle-to-quiescence now runs on every reset, not just snapshot restores.
+"Different code path?" audit vs yesterday's smooth serve-eval found two real discrepancies:
+1. **replan cadence**: serve executes 16 actions per plan (receding_horizon, action_horizon=16); we ran 8 →
+   2× the chunk-boundary discontinuities. Now matched at 16.
+2. **THE BIG ONE — policy weights are not static in our runs**: train_pi_robo gates updates with
+   `can_update = ep_count >= 10`. Episodes 1-10 roll the PRISTINE checkpoint; ep11+ roll checkpoint + 30 LoRA
+   SFT updates/episode. v15: ep10 smooth (pristine), ep18/19 jerky (~240 updates in) — **our SFT warm-up recipe
+   DEGRADES the policy**; serve-eval never trains, hence always smooth.
+**v16 probe (running): num_updates 0 (pristine forever) + replan 16 + settle-everywhere + 3-view videos,
+natural resets.** If smooth + serve-level successes (~10-20%) over ~30 eps → entire expo adapter/inference
+stack validated; isolated culprit = SFT recipe (suspects: LoRA lr, 20-demo overfit at 30 updates/ep,
+action-padding/masking). If still jerky → residual inference-path bug.
