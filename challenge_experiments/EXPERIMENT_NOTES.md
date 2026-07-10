@@ -562,3 +562,21 @@ snapshot recording → expect ~10–20% successes → snapshot pool from the POL
 (in-distribution by construction) → rebuild mini-task from those. num_updates 30, full demos, default 1.5× timeout.**
 Ops lesson of the day: pgrep/pkill/awk patterns inside launchers self-match their own cmdline (5+ incidents) —
 ALWAYS: separate calls: (1) list pids w/ bracketed patterns, (2) kill by number, (3) launch. And disown launchers.
+
+## 🔑 THE DELTA-ACTION BUG — checkpoint is ABSOLUTE (2026-07-09 night, v13→v14)
+
+User artifact report survived TWO posture fixes (keep_still v11, drive-target reset v12→13): arms fly up + head
+tilts down at every snapshot-start. That co-movement pattern = commanded, not passive.
+**Root cause: my delta→absolute conversion itself.** Git dates settle it: the wensi-fork delta-action feature
+(`extra_delta_transform`/`MappedDeltaActions`) merged **2026-06-28**; the provided π0.5 checkpoint was trained
+**2026-06-25** — before the feature existed. **The checkpoint outputs ABSOLUTE joint targets.** My conversion
+added current state onto absolute commands → arms commanded to ~2× angle (straight up), trunk over-lean (head dip).
+Corollaries that now all fit:
+- v11's real improvement was the **quantile→mean/std norm fix** (kept), not the delta plumbing.
+- Navigation always looked fine: base dims 0:3 were never delta-mapped; only arms/torso were corrupted.
+- Current-fork config.py's `extra_delta_transform=True` default describes the NEWER training recipe, not this ckpt.
+Reverted: config delta push + expo_ft.py `_deltas_to_absolute` call sites (norm fix retained).
+**v14 (running):** clean pipeline — absolute actions untouched, mean/std norm, correct prompt, radiorest starts,
+drive-target fix at reset (still correct for snapshot loading). Watch: start posture stable + demo-like arm motion.
+Lesson: when adopting a fork's data config for a pre-existing checkpoint, date-check every feature flag against
+the checkpoint's training date (`git log -S <flag>`).
