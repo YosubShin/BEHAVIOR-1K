@@ -752,3 +752,6 @@ Config: pre-grasp starts + jitter ±0.10m/±12°, max_steps 900 (speed: successe
 **Jittered pristine baseline (eps 1-10): 6/10** — target band achieved. Failure mode: timeouts (reach
 geometry unsolved from offset starts). SFT engaged ep11+; first SFT episode: success @599 (fastest yet).
 Metric of record: SFT-phase success rate vs 6/10.
+
+**v21 (jitter ±0.15m/±18°) pristine baseline: 4/10.** Difficulty ladder mapped: none=8/10, j10=6/10, j15=4/10 —
+a clean monotone dial. SFT engaged ep11+ vs the 40% baseline (best-contrast test of the recipe so far).
