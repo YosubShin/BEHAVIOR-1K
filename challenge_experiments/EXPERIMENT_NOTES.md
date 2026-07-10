@@ -738,3 +738,8 @@ Success bar: pristine-policy successes from pre-grasp starts at ≥ full-task ra
 push p(success) up — the first measurable EXPO-FT improvement. Watch: (a) AG not needed (pre-grasp avoids the
 restore-grasp issue entirely), (b) v15-style SFT degradation after ep10 (now diagnosable on a trusted stack).
 Pool caveat: single instance (308), single trajectory — diversity grows with each new success recorded.
+
+**v19 pristine baseline (eps 1-6): 5/6 successes (~83%) from pre-grasp starts** — 658/908/736/748/751 steps.
+The checkpoint's grasp→toggle skill was strong all along; full-task failures were navigation/approach-geometry.
+Ideal RFT regime: success-rich buffer + measurable headroom. SFT engages at ep11 — metric of record: post-SFT
+rate vs this baseline (and NO v15-style degradation).
