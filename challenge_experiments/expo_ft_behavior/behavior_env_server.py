@@ -459,10 +459,17 @@ class BehaviorEnvOps:
             if self._done and self._success:
                 self._persist_snapshots()
 
-        # Episode video (head cam, 224²): buffer every step, write on episode end.
+        # Episode video (head + both wrist cams side-by-side, 672x224): buffer
+        # every step, write on episode end. Wrist views are what expose gripper
+        # mistakes (mis-grasp, premature close) the head cam hides.
         # Keeps ALL successes + the most recent failures (spot-checking rollouts).
         try:
-            self._ep_frames.append(self._observation()["base_image"])
+            _o = self._observation()
+            self._ep_frames.append(
+                np.concatenate(
+                    [_o["left_wrist_image"], _o["base_image"], _o["right_wrist_image"]], axis=1
+                )
+            )
             if self._done:
                 self._write_episode_video()
         except Exception:
@@ -487,7 +494,8 @@ class BehaviorEnvOps:
         os.makedirs(self._VIDEO_DIR, exist_ok=True)
         tag = "success" if self._success else "fail"
         path = f"{self._VIDEO_DIR}/ep{self._episode_uid:05d}_{tag}_{self._steps}steps.mp4"
-        w = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 30, (224, 224))
+        h, wpx = self._ep_frames[0].shape[:2]
+        w = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 30, (wpx, h))
         for fr in self._ep_frames:
             w.write(cv2.cvtColor(fr, cv2.COLOR_RGB2BGR))
         w.release()
