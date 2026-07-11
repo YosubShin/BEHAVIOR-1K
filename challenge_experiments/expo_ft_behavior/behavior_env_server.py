@@ -111,6 +111,8 @@ class BehaviorEnvOps:
         fixed_eval_starts: int = 0,
         shaping_coef: float = 0.0,
         subtask: str | None = None,
+        perturb_obj_xy: float = 0.0,
+        perturb_obj_yaw_deg: float = 0.0,
     ):
         self.task_name = task_name
         self.instance_ids = instance_ids
@@ -122,6 +124,8 @@ class BehaviorEnvOps:
         # hit failure). Horizon ~EXPO-FT's regime (episodes end in seconds, not
         # minutes) -> fast paired A/Bs for pipeline-health debugging.
         self.subtask = subtask
+        self.perturb_obj_xy = perturb_obj_xy
+        self.perturb_obj_yaw_deg = perturb_obj_yaw_deg
         self._grasp_streak = 0
         self._goal_obj = None
         self._goal_obj_z0 = None
@@ -376,6 +380,8 @@ class BehaviorEnvOps:
             self.robot.set_joint_positions(self.robot.get_joint_positions())
             if self.perturb_pose:
                 self._perturb_robot_pose()
+            if self.perturb_obj_xy > 0.0 or self.perturb_obj_yaw_deg > 0.0:
+                self._perturb_goal_object()
 
         if self._start_near_object:
             self._place_robot_near_object()
@@ -462,6 +468,28 @@ class BehaviorEnvOps:
         new_quat = T.quat_multiply(quat, yaw_q)
         new_pos = pos + th.tensor([dx, dy, 0.0])
         self.robot.set_position_orientation(new_pos, new_quat)
+
+    def _perturb_goal_object(self) -> None:
+        """Object-level DART: jitter the goal object's table pose (x, y, yaw).
+        Small magnitudes — the settle loop resolves resulting contacts; the
+        fall-detector (grasp subtask) or task predicates catch off-table slides."""
+        import omnigibson.utils.transform_utils as T
+        import torch as th
+
+        try:
+            obj = next(
+                e for e in self.env.task.object_scope.values()
+                if e is not None and "agent" not in getattr(e, "name", "agent")
+            )
+            pos, quat = obj.get_position_orientation()
+            dx, dy = self._rng.uniform(-self.perturb_obj_xy, self.perturb_obj_xy, size=2)
+            dyaw = self._rng.uniform(
+                -np.deg2rad(self.perturb_obj_yaw_deg), np.deg2rad(self.perturb_obj_yaw_deg)
+            )
+            yaw_q = T.euler2quat(th.tensor([0.0, 0.0, dyaw]))
+            obj.set_position_orientation(pos + th.tensor([dx, dy, 0.0]), T.quat_multiply(yaw_q, quat))
+        except Exception:
+            logger.warning("goal-object perturbation failed", exc_info=True)
 
     def _place_robot_near_object(self) -> None:
         """Teleport the robot base to `start_distance` m in front of the named task
@@ -716,6 +744,8 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
             fixed_eval_starts=server_cfg.get("fixed_eval_starts", 0),
             shaping_coef=server_cfg.get("shaping_coef", 0.0),
             subtask=server_cfg.get("subtask"),
+            perturb_obj_xy=server_cfg.get("perturb_obj_xy", 0.0),
+            perturb_obj_yaw_deg=server_cfg.get("perturb_obj_yaw_deg", 0.0),
         )
         env_id = str(uuid.uuid4())[:8]
         state[env_id] = env
@@ -774,6 +804,8 @@ def main():
     p.add_argument("--start-snapshot-dir", default=None, help="mini-task mode: reset from these snapshots")
     p.add_argument("--start-near-object", default=None, help="teleport base in front of this task-scope object")
     p.add_argument("--start-distance", type=float, default=0.6)
+    p.add_argument("--perturb-obj-xy", type=float, default=0.0, help="goal-object x/y jitter, meters")
+    p.add_argument("--perturb-obj-yaw-deg", type=float, default=0.0, help="goal-object yaw jitter, degrees")
     p.add_argument("--subtask", default=None, choices=[None, "grasp"],
                    help="override success criterion: 'grasp' = sustained is_grasping(goal obj)")
     p.add_argument("--shaping-coef", type=float, default=0.0,
@@ -801,6 +833,8 @@ def main():
         "fixed_eval_starts": args.fixed_eval_starts,
         "shaping_coef": args.shaping_coef,
         "subtask": args.subtask,
+        "perturb_obj_xy": args.perturb_obj_xy,
+        "perturb_obj_yaw_deg": args.perturb_obj_yaw_deg,
     }
 
     request_q: "queue.Queue" = queue.Queue()
