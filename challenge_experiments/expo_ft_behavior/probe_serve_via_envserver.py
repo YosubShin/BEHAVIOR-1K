@@ -36,7 +36,7 @@ class EnvOpsClient:
         self._packer = Packer()
 
     def call(self, operation: str, **kwargs) -> dict:
-        self._ws.send(self._packer.pack({"operation": operation, "env_id": 0, **kwargs}))
+        self._ws.send(self._packer.pack({"operation": operation, **kwargs}))
         return unpackb(self._ws.recv())
 
 
@@ -50,23 +50,26 @@ def main() -> None:
     args = p.parse_args()
 
     env = EnvOpsClient(args.env_host, args.env_port)
+    created = env.call("create_env")
+    env_id = created["env_id"]
+    print(f"[probe] env {env_id}: {created.get('task_description')}", flush=True)
     policy = WebsocketClientPolicy(host=args.policy_host, port=args.policy_port)
 
     results = []
     for ep in range(args.episodes):
-        env.call("reset")
+        env.call("reset", env_id=env_id)
         policy.reset()
         t0, steps, success = time.time(), 0, False
         while True:
-            eval_obs = env.call("get_eval_obs")["eval_obs"]
+            eval_obs = env.call("get_eval_obs", env_id=env_id)["eval_obs"]
             obs = {
                 k: th.from_numpy(v) if isinstance(v, np.ndarray) else v
                 for k, v in eval_obs.items()
             }
             action = policy.act(obs)
             action = action.detach().cpu().numpy() if isinstance(action, th.Tensor) else np.asarray(action)
-            env.call("step", action=action.astype(np.float32).tolist())
-            info = env.call("get_info_for_step")
+            env.call("step", env_id=env_id, action=action.astype(np.float32).tolist())
+            info = env.call("get_info_for_step", env_id=env_id)
             steps += 1
             if info["done"]:
                 success = bool(info["success"])

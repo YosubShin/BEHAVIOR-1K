@@ -770,3 +770,16 @@ Fix: config.actor_success_only = True. **v22 (running): identical v21 setup (jit
 baseline) + success-only actor updates.** Metric: SFT-phase rate vs 4/10 with sane motion.
 Lesson: when adopting a method's reference config, DIFF EVERY FIELD against your derived config — silent
 defaults invert the algorithm.
+
+## Frozen-eval bracket: the updates are the poison (2026-07-11)
+
+Controlled comparison, same server/starts/harness:
+- **ckpt-10000 (~100 success-only updates): 0/8 frozen** (+0/8 live on same weights = 0/16)
+- **ckpt-5000 (pre-update = pristine): 5/7 frozen** (Fisher exact vs above: p≈0.007)
+~100 gradient steps at WARMUP-scaled lr collapse a 45% policy → structural fault in update_actor's inputs or
+step, not gradual overfit. v22's success-batch data path audited clean (demos marked is_success at insert;
+sampler correct) → suspects narrowed to (a) replay-buffer re-chunking of ONLINE episodes corrupting BC targets
+(demos arrive via a different, offline-converted path), or (b) update mechanics (my hand-authored TrainConfig
+lr/schedule; flow-BC × LoRA interaction).
+**v23 (running): BCLearner (dagger_b1k_config) — actor BC on DEMOS ONLY, no critic.** Healthy after 20 update
+rounds → (a): fix buffer chunking. Degraded → (b): field-diff TrainConfig vs reference.
