@@ -881,3 +881,10 @@ machinery has a genuine math-defying anomaly.**
 critic; (3) RFT dose question — updates too weak to matter; decide higher lr/steps or accept BC-flat and lean
 on selection+residual once critic is real; (4) all future evals: fixed-eval, n≥40; (5) 224 A/B + transfer
 eval still queued.
+
+**Target-decay forensics complete (07:15):** target lora norms 281.62 (5k) → 265.72 (10k) → 208.74 (20k) —
+per-update multiplicative decay ≈0.999 toward ZERO. `optax.incremental_update(get_params(ts), target, tau=0.001)`
+with a healthy 282-norm actor cannot do this → the actor tree actually fed to the soft update has lora ≈ 0.
+get_params itself reads correct (params-or-ema). Suspect: tree-structure/trainable-split mismatch between
+train_step's returned state and target tree (nnx 'value' wrappers / freeze-filter split). Q1 for interactive
+morning session — one function chain to trace: train_step → new_train_state.params[lora] content at runtime.
