@@ -583,7 +583,7 @@ class BehaviorEnvOps:
         self._success = bool(info["done"]["success"]) if "done" in info else bool(terminated and not truncated)
         self._done = bool(terminated or truncated)
         if self.subtask == "grasp" and self._goal_obj is not None:
-            from omnigibson.utils.constants import IsGraspingState
+            from omnigibson.controllers.controller_base import IsGraspingState
 
             grasping = any(
                 self.robot.is_grasping(arm=a, candidate_obj=self._goal_obj) == IsGraspingState.TRUE
