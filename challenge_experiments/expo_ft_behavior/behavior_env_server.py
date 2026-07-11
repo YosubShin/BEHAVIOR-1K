@@ -110,12 +110,21 @@ class BehaviorEnvOps:
         start_joint_states: str | None = None,
         fixed_eval_starts: int = 0,
         shaping_coef: float = 0.0,
+        subtask: str | None = None,
     ):
         self.task_name = task_name
         self.instance_ids = instance_ids
         self._instance_cursor = 0
         self.dense_reward = dense_reward
         self.shaping_coef = shaping_coef
+        # Subtask mode 'grasp': success = sustained is_grasping(goal obj) with either
+        # arm; early FAIL when the object falls off the table (the observed sideways-
+        # hit failure). Horizon ~EXPO-FT's regime (episodes end in seconds, not
+        # minutes) -> fast paired A/Bs for pipeline-health debugging.
+        self.subtask = subtask
+        self._grasp_streak = 0
+        self._goal_obj = None
+        self._goal_obj_z0 = None
         self.perturb_pose = perturb_pose
         self.perturb_xy = perturb_xy
         self.perturb_yaw_deg = perturb_yaw_deg
@@ -380,6 +389,19 @@ class BehaviorEnvOps:
         if used_snapshot:
             self._settle_quiescent()
 
+        self._grasp_streak = 0
+        self._goal_obj = None
+        self._goal_obj_z0 = None
+        if self.subtask == "grasp":
+            try:
+                self._goal_obj = next(
+                    e for e in self.env.task.object_scope.values()
+                    if e is not None and "agent" not in getattr(e, "name", "agent")
+                )
+                self._goal_obj_z0 = float(self._goal_obj.get_position_orientation()[0][2])
+            except Exception:
+                logger.warning("grasp subtask: goal object lookup failed", exc_info=True)
+
         # Spawn-view debug: dump the head-camera view at t=0 (ring of last 40)
         # to compare against the mini-demos' first frames.
         try:
@@ -532,6 +554,23 @@ class BehaviorEnvOps:
             self._prev_phi = phi
         self._success = bool(info["done"]["success"]) if "done" in info else bool(terminated and not truncated)
         self._done = bool(terminated or truncated)
+        if self.subtask == "grasp" and self._goal_obj is not None:
+            from omnigibson.utils.constants import IsGraspingState
+
+            grasping = any(
+                self.robot.is_grasping(arm=a, candidate_obj=self._goal_obj) == IsGraspingState.TRUE
+                for a in self.robot.arm_names
+            )
+            self._grasp_streak = self._grasp_streak + 1 if grasping else 0
+            fell = float(self._goal_obj.get_position_orientation()[0][2]) < self._goal_obj_z0 - 0.25
+            if self._grasp_streak >= 15:
+                self._success = True
+                self._done = True
+                self._last_reward += 1.0
+            elif fell:
+                self._success = False
+                self._done = True
+
         if self._done and not self.dense_reward:
             self._last_reward = q  # sparse variant: final partial credit only
 
@@ -676,6 +715,7 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
             start_joint_states=server_cfg["start_joint_states"],
             fixed_eval_starts=server_cfg.get("fixed_eval_starts", 0),
             shaping_coef=server_cfg.get("shaping_coef", 0.0),
+            subtask=server_cfg.get("subtask"),
         )
         env_id = str(uuid.uuid4())[:8]
         state[env_id] = env
@@ -734,6 +774,8 @@ def main():
     p.add_argument("--start-snapshot-dir", default=None, help="mini-task mode: reset from these snapshots")
     p.add_argument("--start-near-object", default=None, help="teleport base in front of this task-scope object")
     p.add_argument("--start-distance", type=float, default=0.6)
+    p.add_argument("--subtask", default=None, choices=[None, "grasp"],
+                   help="override success criterion: 'grasp' = sustained is_grasping(goal obj)")
     p.add_argument("--shaping-coef", type=float, default=0.0,
                    help="potential-based shaping coefficient (0 = off; phi = -dist(EEF, goal obj))")
     p.add_argument("--fixed-eval-starts", type=int, default=0,
@@ -758,6 +800,7 @@ def main():
         "start_joint_states": args.start_joint_states,
         "fixed_eval_starts": args.fixed_eval_starts,
         "shaping_coef": args.shaping_coef,
+        "subtask": args.subtask,
     }
 
     request_q: "queue.Queue" = queue.Queue()
