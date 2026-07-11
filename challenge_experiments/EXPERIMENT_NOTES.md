@@ -819,3 +819,16 @@ sample_info (committed earlier) for critic-quality traces.
 Metric of record: success rate vs the 40-50% RFT ceiling. Secondary: does selection convert marginal starts
 (watch which candidate idx wins); does the residual explore without destabilizing (user video review).
 This run tests EXPO-FT's core claim on our stack for the first time.
+
+## v25 full-recipe dip + Q-trace diagnosis → v26 critic bootstrap (2026-07-10 late night)
+
+Full recipe (N=8 + residual, resumed actor+critic): **0/6.** Q-traces (new q_traces.jsonl logging) diagnose it:
+- Critic UNINFORMATIVE: Qs tiny/negative (−0.08..−0.05 — impossible given non-negative rewards; ≈ init noise),
+  candidate spread ~0.015, flat across episodes (no progress signal). 30 eps of sparse ToggledOn reward ≪ enough.
+- Yet steering: **82% of executed candidates were residual-edited** — noise-ranked random edits displaced the
+  competent base policy. Adverse selection = the drought mechanism. NOT plumbing (finite/smooth/varied values).
+**Bootstrapping-order finding (paper-relevant): with sparse reward, untrained-critic+residual PREVENTS the
+successes the critic needs.** Deadlock-breaker: v26 = selection-only (N=8, n_edit=0) — noise critic picking
+among base-policy samples ≈ random good sample ≈ baseline regime → successes flow → critic learns real +1s.
+Residual returns when Q-traces show structure (success/failure separation, positive values, rising in-episode).
+Tomorrow w/ user: potential-based shaping reward (EEF→radio distance, training-only) to densify critic signal.
