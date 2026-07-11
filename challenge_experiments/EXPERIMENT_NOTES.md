@@ -903,3 +903,17 @@ Failure-chain now fully causally closed: sparse reward + random-LoRA target → 
 adverse selection under best-of-N → full-recipe collapse. RFT side separately: dose too small to matter.
 NEXT RUN (v31, user go): fixed pipeline + shaping reward decision + critic re-trained from scratch (old critic
 learned garbage targets — must reinit), then selection A/B on fixed-eval set.
+
+## v32 verdict + GRASP SUBTASK pivot (2026-07-11 midday, user-directed)
+
+**v32 paired eval: 0/18 on the fixed set where pristine scored 9/20 — v31's update phase GENUINELY damaged
+the actor** (despite 0.2% param-norm delta; norms don't bound behavioral change — inverse of the target-init
+lesson). Update-recipe damage is now the one standing pipeline defect, reproducible and paired-measurable.
+Also (user insight + their code): EXPO-FT's own rewards are BINARY (light2 = yellow-pixel ROI success DETECTOR
+thresholded to 0/1; pick same; demos padded sparse-terminal). Their advantage = event density via HORIZON:
+~90-step episodes ≈ 6 critic chunks vs our 900/56. Density-of-events, not gradedness.
+**Pivot (user): grasp subtask** — start = pre-grasp pool (base parked), success = is_grasping(radio) sustained
+15 steps (either arm), early-fail = radio falls (z drop >0.25, the observed sideways-knock), cap 300 steps.
+~EXPO-FT's horizon regime; episodes 1-2 min → update-recipe A/Bs in ~30 min. New dials: object-pose DART
+(--perturb-obj-xy/-yaw-deg) if the baseline is too easy (user's call).
+**v33 (running): pristine baseline on 20 fixed starts, subtask=grasp, jitter-15, shaping 0.1.**
