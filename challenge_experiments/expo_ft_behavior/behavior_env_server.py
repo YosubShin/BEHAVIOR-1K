@@ -108,6 +108,7 @@ class BehaviorEnvOps:
         start_distance: float = 0.6,
         prompt: str | None = None,
         start_joint_states: str | None = None,
+        fixed_eval_starts: int = 0,
     ):
         self.task_name = task_name
         self.instance_ids = instance_ids
@@ -193,6 +194,25 @@ class BehaviorEnvOps:
             if not self._start_snaps:
                 raise FileNotFoundError(f"start_snapshot_dir has no .pt snapshots: {start_snapshot_dir}")
             logger.info(f"mini-task mode: {len(self._start_snaps)} start snapshots loaded")
+
+        # Fixed-eval mode: a deterministic list of (snapshot_idx, dx, dy, dyaw)
+        # cycled by episode index. Every evaluation scores the SAME start set —
+        # removing jitter-draw sampling noise from checkpoint comparisons
+        # (overnight 2026-07-11: n<=13 ad-hoc reads on shifting RNG streams
+        # proved undecidable between 15% and 40%).
+        self._fixed_eval = None
+        if fixed_eval_starts and fixed_eval_starts > 0 and self._start_snaps:
+            eval_rng = np.random.default_rng(12345)
+            self._fixed_eval = [
+                (
+                    int(eval_rng.integers(0, len(self._start_snaps))),
+                    float(eval_rng.uniform(-perturb_xy, perturb_xy)),
+                    float(eval_rng.uniform(-perturb_xy, perturb_xy)),
+                    float(eval_rng.uniform(-np.deg2rad(perturb_yaw_deg), np.deg2rad(perturb_yaw_deg))),
+                )
+                for _ in range(fixed_eval_starts)
+            ]
+            logger.info(f"FIXED-EVAL mode: {fixed_eval_starts} deterministic starts (seed 12345)")
 
     # ---- helpers -----------------------------------------------------------
     @staticmethod
@@ -306,7 +326,12 @@ class BehaviorEnvOps:
             import torch as th
 
             # snapshot_path (probe/debug): reset to a SPECIFIC snapshot instead of random.
-            snap_path = snapshot_path or self._start_snaps[int(self._rng.integers(len(self._start_snaps)))]
+            if snapshot_path:
+                snap_path = snapshot_path
+            elif self._fixed_eval is not None:
+                snap_path = self._start_snaps[self._fixed_eval[self._episode_uid % len(self._fixed_eval)][0]]
+            else:
+                snap_path = self._start_snaps[int(self._rng.integers(len(self._start_snaps)))]
             state = th.load(snap_path, weights_only=False)
             import omnigibson as og
 
@@ -386,8 +411,11 @@ class BehaviorEnvOps:
         import torch as th
 
         pos, quat = self.robot.get_position_orientation()
-        dx, dy = self._rng.uniform(-self.perturb_xy, self.perturb_xy, size=2)
-        dyaw = self._rng.uniform(-np.deg2rad(self.perturb_yaw_deg), np.deg2rad(self.perturb_yaw_deg))
+        if self._fixed_eval is not None:
+            _, dx, dy, dyaw = self._fixed_eval[self._episode_uid % len(self._fixed_eval)]
+        else:
+            dx, dy = self._rng.uniform(-self.perturb_xy, self.perturb_xy, size=2)
+            dyaw = self._rng.uniform(-np.deg2rad(self.perturb_yaw_deg), np.deg2rad(self.perturb_yaw_deg))
         yaw_q = T.euler2quat(th.tensor([0.0, 0.0, dyaw]))
         new_quat = T.quat_multiply(quat, yaw_q)
         new_pos = pos + th.tensor([dx, dy, 0.0])
@@ -617,6 +645,7 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
             start_distance=server_cfg["start_distance"],
             prompt=server_cfg.get("prompt"),
             start_joint_states=server_cfg["start_joint_states"],
+            fixed_eval_starts=server_cfg.get("fixed_eval_starts", 0),
         )
         env_id = str(uuid.uuid4())[:8]
         state[env_id] = env
@@ -675,6 +704,8 @@ def main():
     p.add_argument("--start-snapshot-dir", default=None, help="mini-task mode: reset from these snapshots")
     p.add_argument("--start-near-object", default=None, help="teleport base in front of this task-scope object")
     p.add_argument("--start-distance", type=float, default=0.6)
+    p.add_argument("--fixed-eval-starts", type=int, default=0,
+                   help="deterministic eval start set size (0 = random training draws)")
     p.add_argument("--start-joint-states", default=None, help=".npy pool of 23-dim demo start states for trunk/arm/gripper pose")
     args = p.parse_args()
     server_cfg = {
@@ -693,6 +724,7 @@ def main():
         "start_distance": args.start_distance,
         "prompt": args.prompt,
         "start_joint_states": args.start_joint_states,
+        "fixed_eval_starts": args.fixed_eval_starts,
     }
 
     request_q: "queue.Queue" = queue.Queue()
