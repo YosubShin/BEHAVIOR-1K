@@ -858,3 +858,26 @@ Paper-relevant finding: naive best-of-N under an undertrained critic is worse th
 success episodes (the reward events it was starved of). Morning agenda: (1) Q-trace structure check (positive
 values? success/failure separation?) → selection A/B retry when structure appears; (2) discuss potential-based
 shaping reward (EEF→radio) to accelerate critic; (3) transfer-eval design (user's overfitting critique).
+
+## MORNING BRIEF — the night's findings, reframed by parameter forensics (2026-07-11 ~07:00)
+
+**Headline: the actor never meaningfully trained, eval variance fooled us repeatedly, and the critic-side
+machinery has a genuine math-defying anomaly.**
+1. **LoRA params moved 0.2% over 450 updates** (norms 281.59→282.11 across ckpts 5000→20000). RFT at
+   lr 2.5e-5 × this few steps barely dents the policy — "flat" was parameter-space truth, and ALL cross-
+   checkpoint behavioral differences were EVAL VARIANCE (same ckpt-20000 read 38%/24%/8% across three N=1
+   evals). My "slow leak" and "restore corruption" hypotheses: both retracted — noise-fitting, twice.
+2. **Fixed-eval infrastructure works** (paired frames pixel-match: 2.5 codec noise vs 13-15 unpaired) —
+   paired design validated; future claims need n≥40 paired starts for 20-point effects.
+3. **Survivors — the real defects:**
+   a. Full-recipe collapse 0/10 (untrained pessimistic critic + residual = adverse selection; Q-traces).
+   b. **target_actor decay: 281.62 (=actor, ckpt-5000) → 208.74 (ckpt-20000) while the actor moved 0.2%.**
+      optax.incremental_update(actor, target, tau) cannot produce this unless actor.get_params() returns
+      something OTHER than the true actor params. → MORNING Q1: read Pi05Agent.get_params + actor_tau.
+      Broken target policy = broken critic TD targets = uninformative critic (compounds sparse reward).
+4. Checkpoint layout understood: params item = actor weights (healthy); agent item = optimizer state +
+   target_actor + small nets. Save/restore code audited: correct for ema=None.
+**Morning agenda:** (1) get_params/target-update audit → fix; (2) reward shaping (EEF→radio potential) for
+critic; (3) RFT dose question — updates too weak to matter; decide higher lr/steps or accept BC-flat and lean
+on selection+residual once critic is real; (4) all future evals: fixed-eval, n≥40; (5) 224 A/B + transfer
+eval still queued.
