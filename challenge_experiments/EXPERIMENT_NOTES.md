@@ -935,3 +935,19 @@ proper semi-MDP per-chunk discounting (target = R_chunk + γ^replan·Q'; buffer 
 effective horizon = decision count. **v36 (running): replan-32 A/B on same fixed starts (halves decisions to
 ~19; commitment 1.07s vs EXPO-FT's 0.8s). Ref: 12/20.** Closer-starts option deferred (user: arm-out starts
 likely awkward).
+
+## 🔑🔑🔑 REPLAN-32 A/B: full-chunk execution CURES the commitment failure (2026-07-11)
+
+**Paired verdict on identical fixed starts (grasp subtask, obj-jitter):**
+- replan-16 (serve-standard receding horizon): **12/20 (60%)**
+- replan-32 (execute full chunk, no mid-chunk replanning): **18/20 (90%)** — 17/19 excluding one
+  radio-spawned-in-gripper freebie (ep40, 15-step success). p<0.01.
+Successes also FASTER (median ~340 vs ~490 steps). Mechanism: each replan lets the flow model resample a
+slightly different intention; consecutive-chunk disagreement = the hesitation/dithering that defined this
+checkpoint's failure mode since the first serve evals. Committing to the full 32-step chunk (1.07s) removes
+the re-decision points. Decision count per success ≈ 11 — EXPO-FT's regime achieved WITHOUT closer starts.
+Implications: (1) replan-32 = new standard for the testbed; (2) re-check FULL-task rate at replan-32 later —
+serve's 2/10 may be beatable with a one-flag change; (3) paper-worthy standalone finding (receding-horizon
+replanning induces commitment failure in flow-matching VLAs).
+NEXT: the standing defect — update-recipe A/B on this testbed (train ~15 eps full recipe @ replan-32 →
+paired frozen eval vs the 18/20 pristine reference).
