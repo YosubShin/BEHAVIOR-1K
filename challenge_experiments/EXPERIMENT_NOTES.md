@@ -951,3 +951,13 @@ serve's 2/10 may be beatable with a one-flag change; (3) paper-worthy standalone
 replanning induces commitment failure in flow-matching VLAs).
 NEXT: the standing defect — update-recipe A/B on this testbed (train ~15 eps full recipe @ replan-32 →
 paired frozen eval vs the 18/20 pristine reference).
+
+## v37 update-recipe A/B at replan-32: graded erosion confirmed (2026-07-11 evening)
+
+v37 (full fixed recipe, lr 2.5e-5): baseline 10/10, **post-update 13/20 (65%)** vs pristine 18/20 (90%).
+Data quality fully exonerated this time (buffer nearly all successes). With v23's demos-only damage (post-
+buffer-fix), the suspect = UPDATE MECHANICS. Erosion is graded (~25 pts/600 updates), not collapse — fits
+too-hot-lr on LoRA-over-specialized-base (their 2.5e-5 was tuned for LoRA on generic pi05_base).
+**v38 (running): identical run at lr 2.5e-6** (new TrainConfig expo_pi05_b1k_joint_state_lora_lowlr +
+configs/model/expo_ft_b1k_lowlr_config.py). Damage gone → tune lr upward for actual learning. Persists →
+diff flow-loss/timestep-sampling vs wensi's original training code.
