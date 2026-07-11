@@ -783,3 +783,25 @@ sampler correct) → suspects narrowed to (a) replay-buffer re-chunking of ONLIN
 lr/schedule; flow-BC × LoRA interaction).
 **v23 (running): BCLearner (dagger_b1k_config) — actor BC on DEMOS ONLY, no critic.** Healthy after 20 update
 rounds → (a): fix buffer chunking. Degraded → (b): field-diff TrainConfig vs reference.
+
+## 🔑🔑 THE BC-COLLAPSE ROOT CAUSE: chunk backfill breaks anchored deltas (2026-07-11)
+
+v23 (BCLearner, "demos-only") ALSO degraded (1/7 post-update) — which exposed my wrong assumption: with
+offline_ratio=0, demos are seeded into the replay buffer and re-chunked by ITS pipeline too. v23 didn't
+isolate data source; it isolated the buffer. Config diff vs reference: clean (same lr 2.5e-5, NO warmup,
+same LoRA/freeze).
+**Bug (expo_ft/data/replay_buffer.py insert):** the streaming chunk backfill preprocesses each transition
+ALONE — MappedDeltaActions anchors the action to its OWN state — then writes it into earlier rows' chunk
+tails, where a correct target must be anchored to the CHUNK-START state. Every chunk position k>0 stored
+a_{t+k}−state_{t+k} instead of a_{t+k}−state_t → targets biased toward zero ("stay put").
+**Audit (real demo ep0):** at k=8 the buggy target is off by 0.53 normalized units vs a true signal of 0.70 —
+~75% of the action signal erased 8 steps into the chunk, worse deeper. BC on this = trained hesitation;
+collapse in ~100 updates at full lr (2.5e-5, warmup=0 — earlier "warmup-scaled" statements were wrong).
+Why EXPO-FT never saw it: DROID uses velocity-style (anchor-free) actions — backfill of raw per-step actions
+is valid there. Anchored-delta checkpoints (b1k π0.5) are the detonating case.
+**Fix:** buffer stores each row's RAW state; backfill re-anchors the incoming raw action to the chunk-start
+row's state (delta→normalize→pad, matching pipeline order). Auto-detects MappedDeltaActions in the pipeline
+(None → old behavior, DROID semantics preserved). Verified: buffered chunk matches pipeline ground truth to
+6e-8. Committed in the expo-ft repo.
+**v24 (running): full recipe on the fixed buffer** — success-only RFT, jitter-15 starts, ~45% pristine
+reference (9/20 pooled + 5/10 v23). This is attempt #4 at the SFT verdict, now with verified-correct BC targets.
