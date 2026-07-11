@@ -805,3 +805,17 @@ row's state (delta→normalize→pad, matching pipeline order). Auto-detects Map
 6e-8. Committed in the expo-ft repo.
 **v24 (running): full recipe on the fixed buffer** — success-only RFT, jitter-15 starts, ~45% pristine
 reference (9/20 pooled + 5/10 v23). This is attempt #4 at the SFT verdict, now with verified-correct BC targets.
+
+## v24 RFT verdict: FLAT — ceiling = baseline (2026-07-11 night)
+
+v24 final (jitter-15 pre-grasp mini-task, fixed buffer): pristine 5/10, post-update **8/20 (40%)** over 600
+success-only BC updates. No collapse (fix holds), no lift. Reading: at this difficulty, failures are
+geometry-dominated (hard jitter corners), not behavior-mode-dominated — self-imitation has no signal to
+exploit. The RFT ceiling ≈ baseline, exactly the regime where EXPO-FT's actual mechanisms must earn their keep.
+**v25 (running): FULL EXPO-FT** — N=8 best-of-N critic selection + residual edits (n_edit_samples=8, reference
+scalar edit_scale 0.2 UNMODIFIED per user's parity argument), resumed from v24's ckpt-20000 (RFT'd actor +
+~50-episodes-trained critic), --checkpoint_buffer added. Q-values of every candidate set now surface in
+sample_info (committed earlier) for critic-quality traces.
+Metric of record: success rate vs the 40-50% RFT ceiling. Secondary: does selection convert marginal starts
+(watch which candidate idx wins); does the residual explore without destabilizing (user video review).
+This run tests EXPO-FT's core claim on our stack for the first time.
