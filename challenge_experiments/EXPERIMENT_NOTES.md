@@ -845,3 +845,16 @@ residual chunk-boundary artifacts in online success actions. ckpt-10000 low → 
 harder at lr/optimizer.
 Note: selection-only v26 (0/4) used the leaked actor — NOT evidence against selection itself. Redo selection
 A/B from a healthy actor after the leak is plugged.
+
+## Overnight bracket verdict: NO leak — SELECTION HARM is the whole story (2026-07-11 ~02:00)
+
+Clean N=1 frozen evals: ckpt-10000 = 4/13 (31%), ckpt-20000 = 5/13 (38%), vs pristine ~48% pooled — all within
+noise of each other. **Retraction: the "slow leak" was noise-fitting v24's 10-episode halves. RFT is safe and
+flat, full stop.** The post-flip collapse (0/10 pooled under N=8/full recipe on the same weights, Fisher p≈0.02
+vs 35%) is entirely SELECTION HARM: an untrained min-of-ensemble critic picks candidates systematically badly
+(pessimism correlates with something anti-task — NOT a uniform random pick, my earlier assumption was wrong).
+Paper-relevant finding: naive best-of-N under an undertrained critic is worse than no selection.
+**v28 (running overnight): N=1 training resumed from ckpt-20000** — actor safely flat, critic ingesting ~40%-
+success episodes (the reward events it was starved of). Morning agenda: (1) Q-trace structure check (positive
+values? success/failure separation?) → selection A/B retry when structure appears; (2) discuss potential-based
+shaping reward (EEF→radio) to accelerate critic; (3) transfer-eval design (user's overfitting critique).
