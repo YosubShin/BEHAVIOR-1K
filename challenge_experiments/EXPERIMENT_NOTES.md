@@ -917,3 +917,21 @@ thresholded to 0/1; pick same; demos padded sparse-terminal). Their advantage = 
 ~EXPO-FT's horizon regime; episodes 1-2 min → update-recipe A/Bs in ~30 min. New dials: object-pose DART
 (--perturb-obj-xy/-yaw-deg) if the baseline is too easy (user's call).
 **v33 (running): pristine baseline on 20 fixed starts, subtask=grasp, jitter-15, shaping 0.1.**
+
+## Grasp-subtask testbed established (2026-07-11 afternoon)
+
+User video review caught two detector defects (real grab scored fail; button-press scored success) → root cause:
+goal-object selection picked the AGENT (robot_r1 passes a name-based "agent" filter; scope order:
+[agent, radio, table, floor]) → detector/fall/shaping all watched the robot. Fixed: name-matched selection
+(verified in logs: radio_89) + streak-only success (no BDDL passthrough). Also: logger.info is SUPPRESSED
+after Isaac launch — module diagnostics must use logger.warning.
+**Difficulty ladder (grasp, pre-grasp starts, fixed 20 starts, cap 600):**
+- robot jitter 15/18° only: **17/20 (85%)**
+- + radio jitter ±6cm/±30°: **12/20 (60%)** ✓ band
+Reset artifact surfaced: occasional radio-knock during restore+jitter+settle → ~21-step auto-fail (~1/20).
+**Control-frequency comparison (user Q):** EXPO-FT runs 10 Hz, 90-step ≈ 9s episodes ≈ 11 decisions; ours 30 Hz
+(baked into checkpoint — retiming not viable), 600 steps ≈ 20s ≈ 37 decisions @replan16. Critic verified to do
+proper semi-MDP per-chunk discounting (target = R_chunk + γ^replan·Q'; buffer sums γ^i rewards w/ masks) —
+effective horizon = decision count. **v36 (running): replan-32 A/B on same fixed starts (halves decisions to
+~19; commitment 1.07s vs EXPO-FT's 0.8s). Ref: 12/20.** Closer-starts option deferred (user: arm-out starts
+likely awkward).
