@@ -127,7 +127,7 @@ class BehaviorEnvOps:
         self.perturb_obj_xy = perturb_obj_xy
         self.perturb_obj_yaw_deg = perturb_obj_yaw_deg
         if self.subtask == "grasp" and getattr(self, "_goal_obj", None) is not None:
-            logger.info(f"grasp-debug ep{self._episode_uid}: max_streak={getattr(self, '_grasp_streak_max', 0)}")
+            logger.warning(f"grasp-debug ep{self._episode_uid}: max_streak={getattr(self, '_grasp_streak_max', 0)}")
         self._grasp_streak = 0
         self._grasp_streak_max = 0
         self._goal_obj = None
@@ -403,11 +403,22 @@ class BehaviorEnvOps:
         self._goal_obj_z0 = None
         if self.subtask == "grasp":
             try:
+                scope = self.env.task.object_scope
+                # Name-matched selection: 'first non-agent' is ORDER-DEPENDENT and
+                # was observed picking the wrong entity (real grabs scored fail;
+                # detector watched the wrong object). Match the task's goal noun.
                 self._goal_obj = next(
-                    e for e in self.env.task.object_scope.values()
+                    (e for k, e in scope.items() if e is not None and "radio" in str(k).lower()),
+                    None,
+                ) or next(
+                    e for e in scope.values()
                     if e is not None and "agent" not in getattr(e, "name", "agent")
                 )
                 self._goal_obj_z0 = float(self._goal_obj.get_position_orientation()[0][2])
+                logger.warning(
+                    f"grasp subtask goal object: {getattr(self._goal_obj, 'name', '?')} "
+                    f"(scope keys: {list(scope.keys())})"
+                )
             except Exception:
                 logger.warning("grasp subtask: goal object lookup failed", exc_info=True)
 
@@ -586,6 +597,10 @@ class BehaviorEnvOps:
         self._success = bool(info["done"]["success"]) if "done" in info else bool(terminated and not truncated)
         self._done = bool(terminated or truncated)
         if self.subtask == "grasp" and self._goal_obj is not None:
+            # Success comes ONLY from the grasp streak: a BDDL toggle without a
+            # sustained grasp is not this subtask's success (observed: button-press
+            # passthrough credited as success).
+            self._success = False
             from omnigibson.controllers.controller_base import IsGraspingState
 
             grasping = any(
