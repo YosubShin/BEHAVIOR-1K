@@ -109,11 +109,13 @@ class BehaviorEnvOps:
         prompt: str | None = None,
         start_joint_states: str | None = None,
         fixed_eval_starts: int = 0,
+        shaping_coef: float = 0.0,
     ):
         self.task_name = task_name
         self.instance_ids = instance_ids
         self._instance_cursor = 0
         self.dense_reward = dense_reward
+        self.shaping_coef = shaping_coef
         self.perturb_pose = perturb_pose
         self.perturb_xy = perturb_xy
         self.perturb_yaw_deg = perturb_yaw_deg
@@ -157,6 +159,7 @@ class BehaviorEnvOps:
         self._steps = 0
         self._prev_q = 0.0
         self._last_reward = 0.0
+        self._prev_phi = None
         self._success = False
         self._done = False
 
@@ -241,6 +244,22 @@ class BehaviorEnvOps:
         self._initial_predicate_states = [
             [pred.evaluate(task._evaluate_predicate) for pred in option] for option in task.ground_goal_state_options
         ]
+
+    def _shaping_potential(self) -> float:
+        """phi(s) = -distance(right EEF, first goal-scope object). Privileged sim
+        info — legal at training time; never enters the observation."""
+        try:
+            import torch as th
+
+            eef = self.robot.get_eef_position(arm="right")
+            obj = next(
+                e for e in self.env.task.object_scope.values()
+                if e is not None and "agent" not in getattr(e, "name", "agent")
+            )
+            opos = obj.get_position_orientation()[0]
+            return -float(th.linalg.norm(eef - opos))
+        except Exception:
+            return self._prev_phi if self._prev_phi is not None else 0.0
 
     def _q_score(self) -> float:
         """Official partial-credit q_score, computed every step.
@@ -397,6 +416,7 @@ class BehaviorEnvOps:
         self._steps = 0
         self._snapshot_initial_predicates()
         self._prev_q = self._q_score()
+        self._prev_phi = None
         self._last_reward = 0.0
         self._success = False
         self._done = False
@@ -501,6 +521,15 @@ class BehaviorEnvOps:
         q = self._q_score()
         self._last_reward = (q - self._prev_q) if self.dense_reward else 0.0
         self._prev_q = q
+        # Potential-based shaping (training-time only, preserves optimal policy):
+        # r += coef * (phi(s') - phi(s)) with phi = -dist(right EEF, goal object).
+        # Densifies the critic's gradient — the BDDL q-score for this task is a
+        # single ToggledOn predicate, i.e. effectively sparse-terminal.
+        if self.shaping_coef > 0.0:
+            phi = self._shaping_potential()
+            if self._prev_phi is not None:
+                self._last_reward += self.shaping_coef * (phi - self._prev_phi)
+            self._prev_phi = phi
         self._success = bool(info["done"]["success"]) if "done" in info else bool(terminated and not truncated)
         self._done = bool(terminated or truncated)
         if self._done and not self.dense_reward:
@@ -646,6 +675,7 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
             prompt=server_cfg.get("prompt"),
             start_joint_states=server_cfg["start_joint_states"],
             fixed_eval_starts=server_cfg.get("fixed_eval_starts", 0),
+            shaping_coef=server_cfg.get("shaping_coef", 0.0),
         )
         env_id = str(uuid.uuid4())[:8]
         state[env_id] = env
@@ -704,6 +734,8 @@ def main():
     p.add_argument("--start-snapshot-dir", default=None, help="mini-task mode: reset from these snapshots")
     p.add_argument("--start-near-object", default=None, help="teleport base in front of this task-scope object")
     p.add_argument("--start-distance", type=float, default=0.6)
+    p.add_argument("--shaping-coef", type=float, default=0.0,
+                   help="potential-based shaping coefficient (0 = off; phi = -dist(EEF, goal obj))")
     p.add_argument("--fixed-eval-starts", type=int, default=0,
                    help="deterministic eval start set size (0 = random training draws)")
     p.add_argument("--start-joint-states", default=None, help=".npy pool of 23-dim demo start states for trunk/arm/gripper pose")
@@ -725,6 +757,7 @@ def main():
         "prompt": args.prompt,
         "start_joint_states": args.start_joint_states,
         "fixed_eval_starts": args.fixed_eval_starts,
+        "shaping_coef": args.shaping_coef,
     }
 
     request_q: "queue.Queue" = queue.Queue()
