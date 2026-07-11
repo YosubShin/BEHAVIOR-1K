@@ -126,7 +126,10 @@ class BehaviorEnvOps:
         self.subtask = subtask
         self.perturb_obj_xy = perturb_obj_xy
         self.perturb_obj_yaw_deg = perturb_obj_yaw_deg
+        if self.subtask == "grasp" and getattr(self, "_goal_obj", None) is not None:
+            logger.info(f"grasp-debug ep{self._episode_uid}: max_streak={getattr(self, '_grasp_streak_max', 0)}")
         self._grasp_streak = 0
+        self._grasp_streak_max = 0
         self._goal_obj = None
         self._goal_obj_z0 = None
         self.perturb_pose = perturb_pose
@@ -590,6 +593,7 @@ class BehaviorEnvOps:
                 for a in self.robot.arm_names
             )
             self._grasp_streak = self._grasp_streak + 1 if grasping else 0
+            self._grasp_streak_max = max(getattr(self, "_grasp_streak_max", 0), self._grasp_streak)
             fell = float(self._goal_obj.get_position_orientation()[0][2]) < self._goal_obj_z0 - 0.25
             if self._grasp_streak >= 15:
                 self._success = True
