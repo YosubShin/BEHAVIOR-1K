@@ -888,3 +888,18 @@ with a healthy 282-norm actor cannot do this → the actor tree actually fed to 
 get_params itself reads correct (params-or-ema). Suspect: tree-structure/trainable-split mismatch between
 train_step's returned state and target tree (nnx 'value' wrappers / freeze-filter split). Q1 for interactive
 morning session — one function chain to trace: train_step → new_train_state.params[lora] content at runtime.
+
+## 🔑 TARGET-INIT BUG SOLVED — the anomaly was never the update (2026-07-11 morning)
+
+Value-level check at ckpt-5000: actor vs target lora leaves have near-identical NORMS (7.689 vs 7.680) but
+**cosine similarity 0.0014 — completely independent random draws.** My "impossible decay" was the norm of a
+convex mix of near-orthogonal high-dim vectors shrinking at (1-tau)≈0.999/update — textbook, no update bug.
+**Root cause: build_pi05's non-resume branch initializes target_actor_params via init_target_params = a FRESH
+model with independently-random LoRA** instead of copying the actor. With tau=0.001, the target spends ~1000s
+of updates as a random-LoRA policy — and the critic's TD targets sample next-actions from it → the critic has
+been learning values of a NONSENSE policy in every run. Third load-bearing expo-ft bug (after chunk anchoring
+and actor_success_only default); one-line fix (always copy), committed. Worth upstreaming all three.
+Failure-chain now fully causally closed: sparse reward + random-LoRA target → empty/garbage critic →
+adverse selection under best-of-N → full-recipe collapse. RFT side separately: dose too small to matter.
+NEXT RUN (v31, user go): fixed pipeline + shaping reward decision + critic re-trained from scratch (old critic
+learned garbage targets — must reinit), then selection A/B on fixed-eval set.
