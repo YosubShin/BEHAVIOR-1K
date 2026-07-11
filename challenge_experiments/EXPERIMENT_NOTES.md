@@ -832,3 +832,16 @@ successes the critic needs.** Deadlock-breaker: v26 = selection-only (N=8, n_edi
 among base-policy samples ≈ random good sample ≈ baseline regime → successes flow → critic learns real +1s.
 Residual returns when Q-traces show structure (success/failure separation, positive values, rising in-episode).
 Tomorrow w/ user: potential-based shaping reward (EEF→radio distance, training-only) to densify critic signal.
+
+## Overnight pivot: RFT is a SLOW LEAK, not flat (2026-07-11 ~00:45)
+
+v24 outcome sequence re-read: pristine 5/10 → update-half-1 5/10 → **update-half-2 3/10**; pooled evidence on
+ckpt-20000 weights since: 0/6 (full recipe) + 0/4 (selection-only) → ~3/20 on late-update weights. The fixed-
+chunk RFT still degrades, ~10x slower than the anchoring bug. v26 was compounding it (30 updates/ep) — stopped.
+**v27 (running overnight): frozen eval of ckpt-10000** (~3 update rounds; ckpts 15000/20000 quarantined so
+resume loads 10000). Brackets the leak's onset: ckpt-10000 ≈45% → damage is 10k-20k → suspects: lr 2.5e-5
+no-warmup on LoRA (reference uses same, but their update:data ratio differs), online-success data mix, or
+residual chunk-boundary artifacts in online success actions. ckpt-10000 low → leak starts immediately, points
+harder at lr/optimizer.
+Note: selection-only v26 (0/4) used the leaked actor — NOT evidence against selection itself. Redo selection
+A/B from a healthy actor after the leak is plugged.
