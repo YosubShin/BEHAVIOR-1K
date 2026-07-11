@@ -228,6 +228,9 @@ class BehaviorEnvOps:
                     float(eval_rng.uniform(-perturb_xy, perturb_xy)),
                     float(eval_rng.uniform(-perturb_xy, perturb_xy)),
                     float(eval_rng.uniform(-np.deg2rad(perturb_yaw_deg), np.deg2rad(perturb_yaw_deg))),
+                    float(eval_rng.uniform(-perturb_obj_xy, perturb_obj_xy)),
+                    float(eval_rng.uniform(-perturb_obj_xy, perturb_obj_xy)),
+                    float(eval_rng.uniform(-np.deg2rad(perturb_obj_yaw_deg), np.deg2rad(perturb_obj_yaw_deg))),
                 )
                 for _ in range(fixed_eval_starts)
             ]
@@ -474,7 +477,7 @@ class BehaviorEnvOps:
 
         pos, quat = self.robot.get_position_orientation()
         if self._fixed_eval is not None:
-            _, dx, dy, dyaw = self._fixed_eval[self._episode_uid % len(self._fixed_eval)]
+            _, dx, dy, dyaw, *_ = self._fixed_eval[self._episode_uid % len(self._fixed_eval)]
         else:
             dx, dy = self._rng.uniform(-self.perturb_xy, self.perturb_xy, size=2)
             dyaw = self._rng.uniform(-np.deg2rad(self.perturb_yaw_deg), np.deg2rad(self.perturb_yaw_deg))
@@ -496,10 +499,13 @@ class BehaviorEnvOps:
                 if e is not None and "agent" not in getattr(e, "name", "agent")
             )
             pos, quat = obj.get_position_orientation()
-            dx, dy = self._rng.uniform(-self.perturb_obj_xy, self.perturb_obj_xy, size=2)
-            dyaw = self._rng.uniform(
-                -np.deg2rad(self.perturb_obj_yaw_deg), np.deg2rad(self.perturb_obj_yaw_deg)
-            )
+            if self._fixed_eval is not None:
+                *_, dx, dy, dyaw = self._fixed_eval[self._episode_uid % len(self._fixed_eval)]
+            else:
+                dx, dy = self._rng.uniform(-self.perturb_obj_xy, self.perturb_obj_xy, size=2)
+                dyaw = self._rng.uniform(
+                    -np.deg2rad(self.perturb_obj_yaw_deg), np.deg2rad(self.perturb_obj_yaw_deg)
+                )
             yaw_q = T.euler2quat(th.tensor([0.0, 0.0, dyaw]))
             obj.set_position_orientation(pos + th.tensor([dx, dy, 0.0]), T.quat_multiply(yaw_q, quat))
         except Exception:
