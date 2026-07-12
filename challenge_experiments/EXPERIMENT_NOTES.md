@@ -977,3 +977,12 @@ band to answer.
 WSL2 ruled out for Isaac/Vulkan; llama-servers killed → 31.8GB VRAM freed). Role: full-task replan-32 eval,
 then eval farm. Policy serving via SSH reverse tunnel from this box until WSL JAX is warranted.
 NEXT: harder grasp band (radio jitter up) → RFT-lift attempt at safe lr → critic Q-structure gate → selection.
+
+## Difficulty dial-sweep complete → grasplift 65% band → v42 RFT-LIFT ATTEMPT (2026-07-11 late)
+
+Pose dials exhausted (policy at replan-32 visually re-solves any start: grasp 77-85% across jitter maxima).
+**Criterion escalation restored the band: grasplift (hold + raise 0.15m sustained) = 13/20 (65%)** at full
+jitter (robot ±0.22m/25°, radio ±0.10m/45°). Failure modes: drop-during-lift, hard-corner reaches — trainable.
+**v42 (running, overnight): the actual RFT-lift experiment** — updates ON at safe lr 2.5e-6, 60 eps.
+Baseline eps 1-10 pristine, updates from ep11. THE question: does BC-on-own-successes climb above 65%?
+5090: setup mid-install (log growing; -JoyLo flag fixed the -Eval dependency).
