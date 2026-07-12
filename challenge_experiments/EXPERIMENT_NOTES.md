@@ -961,3 +961,19 @@ too-hot-lr on LoRA-over-specialized-base (their 2.5e-5 was tuned for LoRA on gen
 **v38 (running): identical run at lr 2.5e-6** (new TrainConfig expo_pi05_b1k_joint_state_lora_lowlr +
 configs/model/expo_ft_b1k_lowlr_config.py). Damage gone → tune lr upward for actual learning. Persists →
 diff flow-loss/timestep-sampling vs wensi's original training code.
+
+## ✅ PIPELINE-HEALTH ARC CLOSED: lr was the last defect (2026-07-11 night)
+
+**v38 (lr 2.5e-6, all else = v37): baseline 6/10 (phase-shifted start subset), post-update 16/20 (80%)** —
+statistically indistinguishable from pristine 18/20; vs hot-lr v37's 13/20. Single pairwise n=20 isn't
+p<0.05 alone, but hot-lr damage replicated across v31/v32 (full mini-task) and v37 (grasp), and low-lr
+matches pristine → practical verdict: **actor lr 2.5e-6 = safe default for LoRA on the task-specialized
+checkpoint; 2.5e-5 (reference default, tuned for LoRA-on-generic-base) slowly erodes competence.**
+Full defect ledger of the expo-ft adoption, all closed: (1) delta-anchor chunk backfill, (2) actor_success_only
+default, (3) mean/std-vs-quantile + output-state plumbing, (4) replan-16 dithering (32 = cure + 90% baseline),
+(5) actor lr. Whether 2.5e-6 can also LEARN (vs merely not-harm) = open; likely needs the restored-headroom
+band to answer.
+**5090 (new node)**: Windows 11 + RTX 5090 32GB; native-Windows install running (setup.ps1 -Eval -Dataset;
+WSL2 ruled out for Isaac/Vulkan; llama-servers killed → 31.8GB VRAM freed). Role: full-task replan-32 eval,
+then eval farm. Policy serving via SSH reverse tunnel from this box until WSL JAX is warranted.
+NEXT: harder grasp band (radio jitter up) → RFT-lift attempt at safe lr → critic Q-structure gate → selection.
