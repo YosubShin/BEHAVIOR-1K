@@ -126,7 +126,7 @@ class BehaviorEnvOps:
         self.subtask = subtask
         self.perturb_obj_xy = perturb_obj_xy
         self.perturb_obj_yaw_deg = perturb_obj_yaw_deg
-        if self.subtask == "grasp" and getattr(self, "_goal_obj", None) is not None:
+        if self.subtask in ("grasp", "grasplift") and getattr(self, "_goal_obj", None) is not None:
             logger.warning(f"grasp-debug ep{self._episode_uid}: max_streak={getattr(self, '_grasp_streak_max', 0)}")
         self._grasp_streak = 0
         self._grasp_streak_max = 0
@@ -404,7 +404,7 @@ class BehaviorEnvOps:
         self._grasp_streak = 0
         self._goal_obj = None
         self._goal_obj_z0 = None
-        if self.subtask == "grasp":
+        if self.subtask in ("grasp", "grasplift"):
             try:
                 scope = self.env.task.object_scope
                 # Name-matched selection: 'first non-agent' is ORDER-DEPENDENT and
@@ -602,7 +602,7 @@ class BehaviorEnvOps:
             self._prev_phi = phi
         self._success = bool(info["done"]["success"]) if "done" in info else bool(terminated and not truncated)
         self._done = bool(terminated or truncated)
-        if self.subtask == "grasp" and self._goal_obj is not None:
+        if self.subtask in ("grasp", "grasplift") and self._goal_obj is not None:
             # Success comes ONLY from the grasp streak: a BDDL toggle without a
             # sustained grasp is not this subtask's success (observed: button-press
             # passthrough credited as success).
@@ -613,6 +613,10 @@ class BehaviorEnvOps:
                 self.robot.is_grasping(arm=a, candidate_obj=self._goal_obj) == IsGraspingState.TRUE
                 for a in self.robot.arm_names
             )
+            if self.subtask == "grasplift" and grasping:
+                # lift criterion: object raised >=0.15m above its settled start height
+                z = float(self._goal_obj.get_position_orientation()[0][2])
+                grasping = z > self._goal_obj_z0 + 0.15
             self._grasp_streak = self._grasp_streak + 1 if grasping else 0
             self._grasp_streak_max = max(getattr(self, "_grasp_streak_max", 0), self._grasp_streak)
             fell = float(self._goal_obj.get_position_orientation()[0][2]) < self._goal_obj_z0 - 0.25
@@ -831,8 +835,8 @@ def main():
     p.add_argument("--start-distance", type=float, default=0.6)
     p.add_argument("--perturb-obj-xy", type=float, default=0.0, help="goal-object x/y jitter, meters")
     p.add_argument("--perturb-obj-yaw-deg", type=float, default=0.0, help="goal-object yaw jitter, degrees")
-    p.add_argument("--subtask", default=None, choices=[None, "grasp"],
-                   help="override success criterion: 'grasp' = sustained is_grasping(goal obj)")
+    p.add_argument("--subtask", default=None, choices=[None, "grasp", "grasplift"],
+                   help="'grasp' = sustained hold; 'grasplift' = sustained hold AND raised >=0.15m")
     p.add_argument("--shaping-coef", type=float, default=0.0,
                    help="potential-based shaping coefficient (0 = off; phi = -dist(EEF, goal obj))")
     p.add_argument("--fixed-eval-starts", type=int, default=0,
