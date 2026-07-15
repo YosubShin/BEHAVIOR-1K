@@ -119,10 +119,11 @@ Three repos are involved:
 - **This repo (BEHAVIOR-1K fork), branch `challenge/pi05-baseline`:** OmniGibson + challenge eval harness
   + all experiment infrastructure under `challenge_experiments/` (env-ops server with subtask/fixed-eval/
   shaping/lookahead, probes, outcome records `v*_*.txt`, running log `EXPERIMENT_NOTES.md`).
-- **Serving repo (`behavior-1k-solution`, separate):** `scripts/serve_b1k.py` + `B1KPolicyWrapper`. The
-  replan knob is its `--actions_to_execute` flag — the challenge-baseline-with-replan-32 reproduction is
-  `serve_b1k.py --actions_to_execute <action_horizon>` plus the standard eval harness from this repo. No
-  code change required.
+- **Serving repo (wensi-ai/openpi fork, separate; local `/mnt/nvme/openpi`):** `scripts/b1k/serve_b1k.py`
+  + `B1KPolicyWrapper`. The replan knob is `--action_horizon` ("actions to execute before replanning",
+  default 16) — replan-32 reproduction is `--action_horizon 32` plus the standard eval harness from this
+  repo. No code change required; exact commands in `REPRODUCE_REPLAN32.md`. (Not to be confused with the
+  2025-solution stack at `behavior-1k-solution`, whose knob is `--actions_to_execute`.)
 - **expo-ft fork (local, upstream pd-perry/expo-ft):** the recipe with our six fixes + lookahead/trace
   instrumentation; committed locally (no push rights on upstream).
 Checkpoints/norm-stats are outside git (`/mnt/nvme/pi05_pretrained`, `/mnt/nvme/expoft_runs`).
