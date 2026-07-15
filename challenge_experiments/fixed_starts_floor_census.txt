@@ -1,0 +1,21 @@
+reset 1: obj_z=0.534 
+reset 2: obj_z=0.534 
+reset 3: obj_z=0.534 
+reset 4: obj_z=0.534 
+reset 5: obj_z=0.534 
+reset 6: obj_z=0.534 
+reset 7: obj_z=0.534 
+reset 8: obj_z=0.534 
+reset 9: obj_z=0.534 
+reset 10: obj_z=0.534 
+reset 11: obj_z=0.534 
+reset 12: obj_z=0.534 
+reset 13: obj_z=0.534 
+reset 14: obj_z=0.534 
+reset 15: obj_z=0.534 
+reset 16: obj_z=0.534 
+reset 17: obj_z=0.534 
+reset 18: obj_z=0.513 
+reset 19: obj_z=0.534 
+reset 20: obj_z=0.095 FLOOR
+CENSUS-DONE

@@ -986,3 +986,276 @@ jitter (robot ±0.22m/25°, radio ±0.10m/45°). Failure modes: drop-during-lift
 **v42 (running, overnight): the actual RFT-lift experiment** — updates ON at safe lr 2.5e-6, 60 eps.
 Baseline eps 1-10 pristine, updates from ep11. THE question: does BC-on-own-successes climb above 65%?
 5090: setup mid-install (log growing; -JoyLo flag fixed the -Eval dependency).
+
+## 5090 root cause found: driver 610.47 incompatible with Isaac 5.1 RTX renderer (2026-07-12 early)
+
+Smoke test crashed 0xc0000139 + access violation in BOTH SYSTEM and user contexts; VC++ redist didn't fix.
+Differential: bare kit (`SimulationApp({'headless': True})`, no OmniGibson) crashes identically → not our code.
+Minidump (breakpad, parsed with python `minidump` locally): access violation in
+**rtx.scenedb.plugin.dll +0xe533b** during RTX renderer bring-up (~5.4s in). AMD-iGPU masking
+(VK_LOADER_DRIVERS_DISABLE) + multi_gpu:False did NOT help — not a device-selection issue.
+**KNOWN upstream bug**: Isaac Sim 5.1 crashes in rtx.scenedb.plugin on driver branches newer than R580
+(595.x, 610.x) — isaac-sim/IsaacSim#651, #517, NVIDIA forums (RTX 5060Ti/5080/5090 reports, Win+Linux).
+Box runs 610.47; validated Windows driver = **580.88**. Fix in flight: download 580.88 → silent install
+(-s -noreboot) → reboot (sshd is StartType=Automatic, survives) → re-run kit test → smoke test.
+Box hardware note: Ryzen 5 9600X w/ AMD iGPU active alongside the 5090 (dual-adapter enumeration is benign).
+v42 meanwhile: 30/48 (62.5%) vs 65% baseline — training safe at 2.5e-6, no lift signal so far.
+
+## 5090 OPERATIONAL (2026-07-12 ~03:35)
+
+Smoke test green (exit 0: empty-scene og.Environment + step + 3 renders, clean shutdown). Three stacked fixes:
+1. **NVIDIA driver 610.47 → 580.88** (silent install -s -noreboot + reboot): cured rtx.scenedb.plugin access
+   violation (known Isaac 5.1 x R590+/610 incompat, isaac-sim/IsaacSim#651).
+2. **h5py 3.16.0 → 3.15.1**: cured 0xc0000139 on generic_mo_io.dll (omni.sensors.nv lidar/radar link HDF5;
+   h5py 3.16's hdf5.dll poisons the process — IsaacLab discussion #5503).
+3. **KMP_DUPLICATE_LIB_OK=TRUE**: cured OMP Error #15 (kit libomp.dll vs MKL libiomp5md.dll) — must be set
+   in every launch script on this box.
+NEXT on 5090: full-task replan-32 eval — Linux box serves policy (after v42 frees the GPU), reverse tunnel
+`ssh -R 8010:localhost:8010`, challenge eval loop runs on 5090.
+
+## v42 VERDICT: no RFT lift at safe lr (2026-07-12 ~05:30)
+
+**v42 final: baseline 8/10, post-update 27/50 (54%)** vs v41 pristine 13/20 (65%), same fixed starts,
+grasplift @ full jitter, replan-32, lr 2.5e-6, 50 update-episodes (~1500 grad steps). Flat-to-slightly-down;
+z≈0.9, not a significant drop, but definitively NO CLIMB. Combined verdict across the lr axis: 2.5e-5 erodes
+(v37), 2.5e-6 doesn't move (v38 no-harm, v42 no-lift). **BC-on-own-successes (RFT) is a dead end in this band
+— the lift must come from the critic path** (Q-structure gate → selection A/B → residual edits), as queued.
+Ordered outcomes: v42_rft_35of60.txt; videos archive_v42.
+
+## v43 LAUNCHED: full-task replan-32 eval, sim on 5090 (2026-07-12 ~05:30)
+
+5090 full stack proven: env server bound :8102, create_env loads turning_on_radio (task-instances dataset
+downloaded after enabling Windows long paths — zipfile extract needs LongPathsEnabled=1), reset+get_observation
+round-trip OK, head-cam renders the scene correctly. Windows gotcha: ssh -L must target 127.0.0.1 not
+"localhost" (Windows resolves localhost→::1, server binds 0.0.0.0 IPv4 only).
+**v43 = the queued challenge-relevant experiment**: full task (natural resets, train instances 0-4, no
+subtask, no jitter, --full-res), pristine checkpoint (--num_updates 0), replan-32. Pairs against the ~2/10
+replan-16 serve-parity reads. Learner on this box (4090, freed by v42 completion) ↔ tunnel ↔ 5090 sim.
+If replan-32 lifts the full task like it lifted grasp (12→18/20), that's a free challenge-baseline boost.
+
+## ★ FULL-TASK REPLAN-32 CONFIRMED: 15% → 48%, p=0.043 (2026-07-12 ~10:40)
+
+Paired same-day eval, full task, natural resets, train instances 0-4, pristine checkpoint, no updates:
+- **v43 replan-32 (sim on 5090, policy local via tunnel): 10/21 (47.6%)**, still accruing bonus episodes
+- **v44 replan-16 control (all-local): 3/20 (15%)** — reproduces the historical ~2/10 serve-parity reads
+- Fisher exact p=0.043. Successes finish in 1173-1940 steps; failures hit the 3225-step cap.
+**The receding-horizon dithering disease is the dominant full-task failure mode, and full-chunk execution
+cures ~2.5x of it — a one-line inference change, directly bankable for the challenge submission.**
+This also replicates the grasp-subtask finding (12/20→18/20) at full-task scale: mini-task conclusions
+transfer. Outcome records: v44_fulltask_replan16_3of20.txt, v43 list pending its stop.
+Ops note: paired cross-machine eval works (v43 learner restarted mid-run @ XLA fraction 0.35 after v44 OOM;
+create_env is idempotent so the 5090 env survived the learner swap; local env server needs
+OMNIGIBSON_DATA_PATH=/mnt/nvme/behavior_data explicitly).
+
+## v45 Q-STRUCTURE GATE: PASS (2026-07-12 ~13:50)
+
+Frozen probe: v42 checkpoint (first critic trained on correctly-anchored data), N=8 argmax-Q selection,
+no edits, no updates, grasplift fixed starts. From 10 traced episodes:
+- **Success/fail separation ~6σ**: success episode-mean Q −0.000±.002 vs fail −0.012±.001
+- **In-episode rise**: +0.061 in successes vs +0.006 (flat) in fails — critic tracks progress
+- **No selection degeneracy**: picks spread across all 8 candidate indices (v22 pathology absent)
+- Caveats: Q magnitudes tiny (range −0.037..0.065, heavy pessimistic underestimation — ordering is what
+  matters for selection, but calibration is poor); **within-replan candidate spread only ~0.004** — the
+  critic discriminates states far better than actions. Selection lift, if any, will be modest until the
+  critic sharpens on-policy.
+Behavioral read so far (selection active): 8/10 vs 13/20 (65%) N=1 baseline on the same fixed-start set —
+running to n=20 for the A/B verdict. This probe doubles as the selection arm.
+v43 meanwhile: 12/29, stopping at 30.
+
+## v45 SELECTION A/B: FLAT (2026-07-12 ~14:05)
+
+N=8 argmax-Q selection (frozen v42 critic) vs v41 N=1, paired by start (uid%20): 15/20 starts agree,
+2 flips up / 3 down, 12/20 vs 13/20. Selection is behaviorally NEUTRAL — adverse selection cured (v22:
+0/10), but no lift. Cause per gate caveat: critic has state-value structure but ~no action discrimination
+(candidate spread 0.004 << state separation 0.012). Corollary: outcomes in the 65% band are mostly
+START-determined; all 8 candidates share the same fate at hard starts. Fixing those needs a better policy
+(training), not better chunk-picking.
+**Recommendation: run the full reference recipe end-to-end** — critic updates + N=8 selection + residual
+edits ON, BC on successes, safe lr — and let the critic sharpen on-policy; re-read action-spread and the
+frozen-eval curve as training progresses (eval farm on 5090). All components now individually validated:
+clean buffer, safe lr, critic learns state values, selection harmless. Records: v45_selection_13of22.txt.
+
+v43 FINAL at n=30: **12/30 (40%) vs replan-16 control 3/20 (15%), Fisher p=0.069** — the point estimate
+softened from the n=21 read (48%) but the direction is unchanged; ~2.5x. Record: v43_fulltask_replan32_12of30.txt.
+5090 env server left loaded (eval-farm role). Learner stopped, local GPU freed for the full-recipe run.
+
+## v46 LAUNCHED: full reference recipe (2026-07-12 ~14:30)
+
+Per lookahead-vs-training decision (lookahead parked as later diagnostic/ablation; checkpoint archived so
+it stays runnable): **v46 = critic+actor updates (safe lr) + N=8 selection + n_edit_samples=8, reference
+edit_scale**, resumed from v42 ckpt+buffer (copied to new run dir expoft_b1k_grasplift_v46_fullrecipe for
+provenance). Grasplift fixed starts, replan-32, 60-ep target. Hypothesis: selection+edits live → action
+contrast in the buffer → critic develops A(s,a). Metrics: (1) candidate Q-spread across checkpoints
+(0.004 → toward 0.012 state-level = learning), (2) rolling success vs 65% band, (3) frozen 20-start evals
+at checkpoint saves. Mem fractions: learner 0.5.
+
+v46 RESTART at reference batch/utd (user-caught deviation, 2026-07-12 ~15:40): we had been running
+batch 32/utd 10 since the early OOM era — reference is **64/20** (train_pi_robo flag defaults). That's 4x
+less critic gradient per data than intended, plausibly co-responsible for the weak action discrimination.
+96GB card + chunked batches + 0.5 fraction now afford parity. First 4 utd-10 episodes archived
+(archive_v46_utd10, q_traces .utd10_first4eps). Expect ~30-40 min/ep; read curve at ~30 eps (~1 day).
+Sixth adoption deviation for the ledger: batch/utd halving.
+
+v46 OOM saga → SIM MOVED TO 5090 (2026-07-12 ~16:30): reference 64/20 update graph needs ~48GB live +
+a 19GB TD-sampling tensor; OOM'd at 0.5, 0.68 (batch_split 2), and 0.72 (batch_split 4) with the local
+sim's 14GB cohabiting. Fix: grasplift env server now runs ON the 5090 (:8103, snapshots copied to
+C:\co\snapshots, videos to C:\co\videos_grasplift), learner gets 0.85×96GB locally. This is the
+"5090 as actor" arrangement the user proposed — adopted for VRAM, not throughput. 8103 tunnel has
+auto-heal in the progress monitor. batch_split=4 kept (math-preserving forward chunking).
+
+## v46 STOPPED EARLY at 7/23 (user-approved) → v47 DECOMPOSITION EVAL (2026-07-13 ~10:10)
+
+v46 final read: **7/23 (30%) vs 65% band — the full recipe HURT rollout performance.** Pre-registered
+metrics both negative: candidate spread collapsed back to 0.004-0.008 (recalibration shock, no action
+discrimination emerged from on-policy training at reference 64/20); success/fail Q-separation compressed
+to noise. Rolling windows 3/10, 4/10, 3/10. Mechanism hypothesis: with a non-discriminating critic,
+argmax-16 ≈ uniform draw and half the candidates are noise-edited chunks → ~every other executed chunk
+is noised (mild v22 adverse selection that critic training never fixed).
+**v47 (running): the decomposition** — v46 checkpoint step 15000, N=1, no edits, frozen, fixed 20 starts.
+Reads: ~65% → weights intact, harm was rollout-time edit noise (improvement operator broken for this
+checkpoint; crisp negative for the recipe). ~35% → training also damaged weights (reopens lr/critic-grad).
+Records: v46_fullrecipe_7of23.txt; v46 train videos on 5090 C:\co\videos_v46train.
+
+## ★ v47 DECOMPOSITION VERDICT: WEIGHTS INTACT — the harm was the improvement operator (2026-07-13 ~11:15)
+
+**v47 (v46 ckpt step 15000, N=1, no edits, frozen, fixed starts): 14/21 (67%)** — statistically identical
+to the 65% pristine band. v46's 30% was therefore ENTIRELY rollout-time: argmax-Q over 16 candidates with
+a non-discriminating critic ≈ uniform draw, half the candidates are noise-edited chunks → ~every other
+executed chunk was noised. Training at reference 64/20 + safe actor lr is weight-SAFE (no erosion) but
+the recipe's improvement operator (critic selection + residual edits) is non-functional for this
+checkpoint: the critic never develops action discrimination, even from on-policy contrast data.
+Recipe status after the full arc (v42 RFT flat, v45 selection flat, v46 full recipe harmful-at-rollout,
+v47 weights clean): **EXPO-FT's mechanisms do not lift this task-specialized flow-matching checkpoint in
+this band. The only intervention that moved the number remains inference-time commitment (replan-32,
+15%→40-48% on the full task).** Next-fork options for user: (a) sim-lookahead V-sufficiency diagnostic
+(publishing ablation), (b) shaping/horizon axis (denser events), (c) bank replan-32 + focus on challenge
+submission pipeline. Records: v47_decomp_14of21.txt.
+
+## v49 LAUNCHED: sim-lookahead V-sufficiency diagnostic (2026-07-13 ~16:55, user picked fork 1)
+
+The user's insight operationalized: enumerate actions + perfect model (the sim IS the model) + learned V.
+New infra: env server op `lookahead_probe(actions)` — dump_state → execute candidate chunk → return
+terminal obs + ORACLE signals (grasping bool, obj_z, phi) → load_state + drive-target re-pin (episode
+untouched); agent methods `sample_candidate_actions` (N plain flow samples, no edits/selection) and
+`estimate_state_value` (min-ensemble Q(s,a~pi), the TD-target estimator); train_pi_robo `--lookahead_n N`
+branch + lookahead_traces.jsonl (per-replan V of all 8 candidates + chosen idx + oracle).
+v49 config: v46 ckpt (weights=pristine-equivalent per v47; critic=trained), N=8 plain candidates,
+replan-32, fixed 20 starts, frozen. ~10-15 min/ep (8x sim). Baselines: N=1 65% (v41/v47), Q-select flat
+(v45). READS: lookahead >> 65% → V is control-sufficient, deficit was the missing implicit model (→
+distill lookahead picks / train Q against probe outcomes). Lookahead ≈ 65% → V itself lacks action-relevant
+signal → the critic axis is dead for this checkpoint; pivot to event-density (fork 2) or bank inference wins.
+BONUS from oracle logs: correlation of V(s') with ground-truth grasp/obj_z per candidate = direct measure of
+what V sees, independent of episode outcomes. v48 held-out full-task eval continues in parallel (5/7 so far).
+
+v49 take-2 healthy (counter fix verified: 19 replans, 601-step episode). MAJOR side-discovery from oracle
+logs: some fixed-eval starts have the radio ON THE FLOOR at spawn (obj_z=0.046 vs table 0.53) — the
+±0.10m object jitter pushes it off the table edge for certain (snapshot, dx, dy) tuples → those starts are
+UNWINNABLE for any policy. Likely explains the start-determinism (75% cross-arm agreement) and the ~65-75%
+ceiling of every grasplift eval. TODO after v49: classify all 20 fixed starts by spawn obj_z (oracle now
+logs it), recompute all historical rates on the winnable subset, and consider re-rolling the fixed-eval
+tuples with a table-bounds check.
+
+## v49 LOOKAHEAD VERDICT: V steers correctly; no outcome lift; failure = criterion-marginal lifts (2026-07-13 ~20:15)
+
+**9/20 (45%; 9/19=47% on winnable table-starts) vs N=1 65%, Q-select 59% — no lift, mildly below.**
+BUT the mechanism data is unambiguous and answers the fork-1 question:
+- **V + perfect model = competent selector**: grasp-pick fidelity 56/57; during lifts the pick tracks the
+  best-lifting candidate within ~1cm. The same critic that was useless for direct Q(s,a) ranking (v45
+  spread 0.004) becomes accurate when the sim supplies the dynamics — the user's V-sufficiency conjecture
+  CONFIRMED at the mechanism level; the Q-head's missing piece is exactly the implicit model.
+- **Why no outcome lift**: greedy 1-chunk V-optimization walks into criterion-marginal states — failures
+  lift to 0.637-0.673 vs 0.684 threshold and sag/time out (grip too weak to exceed +0.15m, or cap hits
+  mid-climb). V has no preference gradient beyond the best of 8 samples, and horizon-32 greed doesn't plan
+  grip quality for the LATER lift. Also one bug found+fixed en route: probe steps advanced the env's
+  python-side episode counter → truncation at step 65 (counter now saved/restored in lookahead_probe).
+- Interpretation for the recipe: selection CAN'T be rescued by a better selector — even oracle-model
+  selection with honest V tops out at baseline. The band's residual failures are physics-marginal, not
+  choice-limited. RL on this checkpoint needs either a different objective (grip quality / lift shaping)
+  or a different criterion. Also 1/20 fixed starts confirmed floor-radio (unwinnable).
+Records: v49_lookahead_9of20.txt; lookahead_traces.jsonl (+.buggy_counter).
+
+## v48 HELD-OUT VERDICT: replan-32 generalizes — 15/20 (75%) on unseen instances (2026-07-13 ~23:20)
+
+Full task, pristine ckpt, replan-32, natural resets, INSTANCES 5-9 (never used in any tuning/eval before):
+**15/20 (75%)** vs 12/30 (40%) on instances 0-4. The replan-32 gain is not instance-overfit — if anything
+0-4 are the hard draw. Combined full-task picture at replan-32: 27/50 (54%) across 10 instances vs
+replan-16's 3/20 (15%) on 0-4. Addresses the user's overfitting critique for the inference-time win.
+Record: v48_heldout_15of20.txt. All GPUs idle now — day closed with: replan-32 validated + generalizing;
+EXPO-FT mechanisms exhausted (RFT/selection/edits/full-recipe/oracle-lookahead all flat-or-harmful with
+weights intact); V-sufficiency confirmed mechanistically; fork-2 target sharpened to lift/grip shaping.
+
+Floor-start census (2026-07-14 ~00:15, idle-time diagnostic via 1-noop lookahead_probe on all 20 fixed
+starts): **1/20 spawns the radio on the floor** (z=0.095; one more borderline at 0.513 vs nominal 0.534).
+Contamination = 5%: fixed-set ceiling ~19/20, the "65% band" ≈ 68% of winnable. Historical A/B comparisons
+unaffected (shared set). Record: fixed_starts_floor_census.txt.
+
+## v50 LAUNCHED: staged-shaping run (fork 2), phase 1 (2026-07-14 ~06:00)
+
+New shaping mode in env server (--shaping-mode staged): phi = 1-tanh(dist) pre-grasp -> +1 step on grasp
+-> 1 + clip(dz/0.15,0,1) while grasping. Potential-based (state-only, difference form) so optimal policy
+unchanged; targets exactly the v49-diagnosed failure (lift stall + grip slip). Causal chain being tested:
+staged phi -> critic learns action-relevant lift gradient -> (phase 2) residual actor ascends Q beyond the
+base policy's sample support — the one mechanism v42-v49 never gave a fair shot.
+v50 phase 1 (running): FRESH run (pristine actor, fresh critic — no old-shaping reward contamination in
+the buffer), N=1 no edits (reference warm-up protocol; v8 lesson), 64/20 + batch_split 4, safe lr, staged
+coef 0.1, ~45 min/ep, 25 eps (~19h) -> then flip config to N=8 + 8 edits (phase 2) and watch: rolling
+success vs 65% band, candidate Q-spread, and (via any lookahead probes) max candidate lift height.
+
+## v50 GATE PASSED → PHASE 2 LAUNCHED (2026-07-14 ~14:50)
+
+Phase 1 final: 17/25 (68%), no erosion. Frozen lookahead probe (3 eps, v50 critic):
+- **candidate V-spread 0.024 = 4x the terminal-reward critic** — action discrimination EMERGED from staged reward
+- **grasp/non-grasp gap +0.072 vs +0.009 = 10x** the old 0.006
+- corr(V, obj_z | grasping) = −0.61: NOT a defect — textbook potential-shaping offset (V_shaped = V − coef·φ(s));
+  progress incentive lives in Q's action term where φ(s) cancels across candidates. LESSON: lookahead-style
+  cross-state ranking with a shaped critic must un-shape first (rank V + coef·φ(s')). Probe metric corrected.
+- Phase-1 actor already samples lifts to z=0.757 (> 0.684 threshold; pristine ceiling was 0.673) — BC on
+  staged-era successes shifted the distribution upward. Probe eps went 2/3.
+**Phase 2 running**: N=8 + 8 residual edits, staged reward, 64/20, resume from phase-1 ckpt+buffer.
+Watch: rolling success vs 68%, q_traces spread, no v46-style edit-noise collapse (the phase-1-trained critic
+is the difference vs v46). Verdict: frozen paired eval after ~30 phase-2 eps.
+
+## v50 PHASE-2 KILLED at 2/9 [FSSFFFFFF] — v51 decomposition running (2026-07-14 ~21:15)
+
+Kill rule (≤4/10) mathematically guaranteed at 2/9; six consecutive fails, edit-picks 76-89% throughout.
+The v46 collapse pattern REPRODUCED even with a critic that provably discriminates actions (4x spread,
+10x grasp gap from staged reward). Working hypothesis: max-over-16 harvests critic estimation noise
+faster than real signal — the improvement operator is broken independent of critic quality on this
+checkpoint. v51 (running): N=1 frozen on the phase-2 ckpt (step 15000), fixed starts — weights-intact
+check. If intact (expected): the arc's final diagnosis = both components work in isolation (staged critic
+learns actions; V+model selects correctly) but the recipe's rollout-time composition is inherently
+destructive here. Video-count offset: v51 episodes = dir total − 36 (archive mv failed on ssh flake —
+5090 connectivity intermittent tonight).
+
+## v51 VERDICT: weights intact again — THE EXPO-FT ARC IS CLOSED (2026-07-15 ~23:20)
+
+v51 (N=1 frozen, phase-2 ckpt step 15000, fixed starts): **12/22 (55%)** — statistically within the 65%
+band (p=0.37), nothing like phase-2's 22% rollout rate. The phase-2 collapse was once again rollout-time.
+FINAL DIAGNOSIS of the EXPO-FT program on this checkpoint, each link independently established:
+1. Staged dense reward DOES teach the critic action discrimination (v50 phase 1: 4x spread, 10x grasp gap).
+2. A good V + perfect model DOES select correctly (v49: 56/57 fidelity).
+3. The rollout improvement operator (argmax-Q over half-noise-edited candidates) is destructive REGARDLESS
+   — with a mush critic (v46) and with a discriminating critic (v50p2: 2/9, edit-picks 76-89%). Max-over-16
+   harvests estimation noise faster than any learned signal accumulates.
+4. Even oracle selection can't exceed the sample support (v49), and BC alone doesn't move the band (v42).
+=> On a task-specialized flow checkpoint, EXPO-FT has no working lever: its evaluation machinery can be
+made healthy, but its improvement machinery either does nothing (BC, selection) or harms (edits).
+The program's only transferable win remains inference-time commitment (replan-32: 15%→54% full task,
+generalizing). Records: v50 q_traces/lookahead_traces_gate, v51 count via offset (videos_grasplift 36→58).
+GPUs idle. Candidate next directions (user call): write up the arc (paper-shaped: commitment vs choice in
+flow-VLA fine-tuning), port replan-32 pipeline toward the challenge submission, or a fundamentally
+different RL attack (e.g., DPO-style chunk preference on lookahead pairs — sidesteps rollout selection).
+
+## v52 CLOSES THE MATRIX: EDITS CONCLUSIVELY THE POISON (2026-07-15 ~03:15)
+
+v52 (N=8 PLAIN selection, staged critic, frozen, user-proposed missing cell): **15/22 (68%), paired
+by-start vs v41: 14 agree / 3 up / 3 down — exactly neutral.** Full matrix: every collapse cell contains
+residual edits (v46 30%, v50p2 22%); every edit-free cell is neutral (v45, v49, v52) regardless of critic.
+MECHANISM (code-level): update_residual_actor trains by gradient-ascending the critic's MEAN-ensemble Q
+w.r.t. the 736-dim action input — an adversarial-example generator; its attacks then win the rollout
+argmax (76-89% edit-picks) because they were optimized to. Amplifiers (user's hypothesis, endorsed):
+sim determinism + 20 fixed starts + specialized policy = razor-thin Q coverage; 736-dim chunks (replan-32)
+= exponentially more off-manifold volume than the reference's ~60-130-dim real-robot chunks. Reference
+regime sits on the benign side of all three axes.
+ARC FULLY CLOSED with complete causal story. Next-direction options for user: writeup / submission
+engineering on replan-32 / support-escape without Q-ascent (lookahead-pair DPO).

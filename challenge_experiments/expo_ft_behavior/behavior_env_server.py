@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import queue
 import threading
 import traceback
@@ -110,6 +111,7 @@ class BehaviorEnvOps:
         start_joint_states: str | None = None,
         fixed_eval_starts: int = 0,
         shaping_coef: float = 0.0,
+        shaping_mode: str = "eef",
         subtask: str | None = None,
         perturb_obj_xy: float = 0.0,
         perturb_obj_yaw_deg: float = 0.0,
@@ -119,6 +121,7 @@ class BehaviorEnvOps:
         self._instance_cursor = 0
         self.dense_reward = dense_reward
         self.shaping_coef = shaping_coef
+        self.shaping_mode = shaping_mode
         # Subtask mode 'grasp': success = sustained is_grasping(goal obj) with either
         # arm; early FAIL when the object falls off the table (the observed sideways-
         # hit failure). Horizon ~EXPO-FT's regime (episodes end in seconds, not
@@ -265,18 +268,40 @@ class BehaviorEnvOps:
         ]
 
     def _shaping_potential(self) -> float:
-        """phi(s) = -distance(right EEF, first goal-scope object). Privileged sim
-        info — legal at training time; never enters the observation."""
+        """Potential-based shaping (state-only, difference form => optimal policy
+        preserved). Privileged sim info — legal at training time; never enters
+        the observation.
+        - mode 'eef' (legacy): phi = -dist(right EEF, goal object).
+        - mode 'staged' (v50, from the v49 lookahead traces: approach+grasp are
+          solved, lifts stall 0.64-0.67m vs the 0.684m criterion and grips slip):
+            not grasping: phi = 1 - tanh(dist)             in [0, 1)
+            grasping:     phi = 1 + clip(dz/0.15, 0, 1)    in [1, 2]
+          Grasp acquisition = +1 potential step (event density); lift progress is
+          linear in exactly the failing quantity; drops slam phi back down."""
         try:
+            import math
+
             import torch as th
 
             eef = self.robot.get_eef_position(arm="right")
-            obj = next(
+            obj = self._goal_obj or next(
                 e for e in self.env.task.object_scope.values()
                 if e is not None and "agent" not in getattr(e, "name", "agent")
             )
             opos = obj.get_position_orientation()[0]
-            return -float(th.linalg.norm(eef - opos))
+            if self.shaping_mode != "staged":
+                return -float(th.linalg.norm(eef - opos))
+
+            from omnigibson.controllers.controller_base import IsGraspingState
+
+            grasping = any(
+                self.robot.is_grasping(arm=a, candidate_obj=obj) == IsGraspingState.TRUE
+                for a in self.robot.arm_names
+            )
+            if grasping:
+                dz = float(opos[2]) - float(getattr(self, "_goal_obj_z0", float(opos[2])))
+                return 1.0 + max(0.0, min(1.0, dz / 0.15))
+            return 1.0 - math.tanh(float(th.linalg.norm(eef - opos)))
         except Exception:
             return self._prev_phi if self._prev_phi is not None else 0.0
 
@@ -657,7 +682,7 @@ class BehaviorEnvOps:
         return {"action": a, "action_type": "policy"}
 
     _ep_frames: list = []
-    _VIDEO_DIR = "/mnt/nvme/expoft_videos/miniradio"
+    _VIDEO_DIR = os.environ.get("EXPOFT_VIDEO_DIR", "/mnt/nvme/expoft_videos/miniradio")
     _KEEP_FAILS = 30
 
     def _write_episode_video(self) -> None:
@@ -704,6 +729,78 @@ class BehaviorEnvOps:
 
     def get_observation(self) -> dict:
         return {"observation": self._observation()}
+
+    def lookahead_probe(self, actions: list) -> dict:
+        """Simulate a candidate action chunk from the CURRENT sim state, return the
+        terminal observation (+ ground-truth oracle signals), then restore the sim
+        exactly to where it was. Pure diagnostic for V-guided chunk selection: no
+        episode bookkeeping — no step count, rewards, success streaks, videos, or
+        snapshot-ring mutation. The episode continues as if this never happened."""
+        import torch as th
+
+        import omnigibson as og
+
+        saved_sim = og.sim.dump_state(serialized=False)
+        saved_book = (
+            self._steps,
+            self._last_reward,
+            self._prev_q,
+            self._prev_phi,
+            self._success,
+            self._done,
+            getattr(self, "_grasp_streak", 0),
+        )
+        # The env's internal episode-step counter is python state, NOT sim state:
+        # probe steps advance it toward the Timeout termination (observed: every
+        # episode truncated at step 65 after two probe rounds). Save/restore it.
+        base_env = self.env
+        while not hasattr(base_env, "_current_step") and hasattr(base_env, "env"):
+            base_env = base_env.env
+        saved_env_step = base_env._current_step
+        a = np.asarray(actions, dtype=np.float32)
+        obs = None
+        for row in a:
+            obs, _, _, _, _ = self.env.step(th.from_numpy(row), n_render_iterations=1)
+        self.evaluator.obs = self.evaluator._preprocess_obs(obs)
+        final_obs = self._observation()
+
+        # Oracle signals at chunk end (analysis-only; V never sees these).
+        oracle = {}
+        try:
+            if self._goal_obj is not None:
+                from omnigibson.controllers.controller_base import IsGraspingState
+
+                oracle["grasping"] = bool(
+                    any(
+                        self.robot.is_grasping(arm=arm, candidate_obj=self._goal_obj) == IsGraspingState.TRUE
+                        for arm in self.robot.arm_names
+                    )
+                )
+                oracle["obj_z"] = float(self._goal_obj.get_position_orientation()[0][2])
+            if self.shaping_coef > 0.0:
+                oracle["phi"] = float(self._shaping_potential())
+        except Exception:
+            logger.warning("lookahead oracle failed", exc_info=True)
+
+        og.sim.load_state(saved_sim, serialized=False)
+        base_env._current_step = saved_env_step
+        # Same drive-target re-pin as snapshot reset: load_state restores joint
+        # positions but not position-drive targets.
+        self.robot.set_joint_positions(self.robot.get_joint_positions())
+        for _ in range(3):
+            og.sim.render()
+        obs2, _ = self.env.get_obs()
+        self.evaluator.obs = self.evaluator._preprocess_obs(obs2)
+        (
+            self._steps,
+            self._last_reward,
+            self._prev_q,
+            self._prev_phi,
+            self._success,
+            self._done,
+            self._grasp_streak,
+        ) = saved_book
+        return {"observation": final_obs, "oracle": oracle}
 
     def get_eval_obs(self) -> dict:
         """The evaluator's preprocessed obs — byte-for-byte what the challenge
@@ -772,6 +869,7 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
             start_joint_states=server_cfg["start_joint_states"],
             fixed_eval_starts=server_cfg.get("fixed_eval_starts", 0),
             shaping_coef=server_cfg.get("shaping_coef", 0.0),
+            shaping_mode=server_cfg.get("shaping_mode", "eef"),
             subtask=server_cfg.get("subtask"),
             perturb_obj_xy=server_cfg.get("perturb_obj_xy", 0.0),
             perturb_obj_yaw_deg=server_cfg.get("perturb_obj_yaw_deg", 0.0),
@@ -790,6 +888,8 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
         return env.get_observation()
     if op == "get_eval_obs":
         return env.get_eval_obs()
+    if op == "lookahead_probe":
+        return env.lookahead_probe(req["actions"])
     if op == "get_info_for_step":
         return env.get_info_for_step()
     return {"status": "error", "message": f"unknown operation {op}"}
@@ -837,6 +937,8 @@ def main():
     p.add_argument("--perturb-obj-yaw-deg", type=float, default=0.0, help="goal-object yaw jitter, degrees")
     p.add_argument("--subtask", default=None, choices=[None, "grasp", "grasplift"],
                    help="'grasp' = sustained hold; 'grasplift' = sustained hold AND raised >=0.15m")
+    p.add_argument("--shaping-mode", default="eef", choices=["eef", "staged"],
+                   help="potential: eef distance (legacy) or staged approach/grasp/lift (v50)")
     p.add_argument("--shaping-coef", type=float, default=0.0,
                    help="potential-based shaping coefficient (0 = off; phi = -dist(EEF, goal obj))")
     p.add_argument("--fixed-eval-starts", type=int, default=0,
@@ -861,6 +963,7 @@ def main():
         "start_joint_states": args.start_joint_states,
         "fixed_eval_starts": args.fixed_eval_starts,
         "shaping_coef": args.shaping_coef,
+        "shaping_mode": args.shaping_mode,
         "subtask": args.subtask,
         "perturb_obj_xy": args.perturb_obj_xy,
         "perturb_obj_yaw_deg": args.perturb_obj_yaw_deg,
