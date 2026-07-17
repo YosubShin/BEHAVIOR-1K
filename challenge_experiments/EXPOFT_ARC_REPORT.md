@@ -1,7 +1,7 @@
 # Online RL Fine-Tuning of a Flow-Matching VLA: the EXPO-FT Arc
 
 **Project:** BEHAVIOR Challenge 2026, π0.5 baseline (turning_on_radio), EXPO-FT adoption
-**Period:** 2026-07-05 → 2026-07-15 (runs v0–v52)
+**Period:** 2026-07-05 → 2026-07-17 (runs v0–v55)
 **TL;DR:** After a six-defect adoption debug, the only intervention that improved task success was an
 inference-time change — executing the policy's full 32-action chunk instead of replanning halfway
 (**15% → 54%** full-task success, generalizing to held-out instances). Every learning mechanism in the
@@ -67,9 +67,12 @@ commitment cures it. One line of inference config; generalizes across instances.
 | v50 | **staged dense reward** (approach → +1 grasp step → linear lift height, potential-based) | phase 1: critic gains real action discrimination (4× spread, 10× grasp gap) with zero erosion; phase 2 (selection+edits on): collapse again, 2/9 |
 | v51 | decomposition of v50 phase 2 | weights intact (12/22 ≈ band) |
 | v52 | best-of-8 **plain** selection with the discriminating critic (no edits) | exactly neutral: 15/22; paired vs baseline 14 agree / 3 up / 3 down |
+| v53/v54 | **consistent-diet critic**: demo rewards recomputed to the same staged φ (decoded from raw per-step sim states at chunk boundaries — telescoping means boundaries suffice), demos trimmed to the grasp+lift band, stored per-step rewards | critic quality best of the arc (clean 3× success/fail separation at *half* v50's steps, healthy 0.0136 candidate spread, no erosion at 17/25 warm) — yet plain selection still capped: 11/20 vs the 65% band |
+| v55 | edits with the consistent-diet critic + its residual actor | still harmful: 5/14 (36%), 69% edit-pick rate — attenuated vs 22–30% collapses and 76–89% pick rates under worse critics, but the direction is unchanged |
 
-**The matrix has no exceptions: every collapse cell contains residual edits; every edit-free cell is
-neutral, under both mush and discriminating critics.**
+**The matrix has no exceptions: edits are harmful in all three critic regimes (mush / discriminating /
+consistent-diet); every edit-free cell is neutral. Better critics attenuate the damage; no diet eliminates
+it, because the ascent attacks estimation error itself.**
 
 ## 5. Mechanism: why edits are the poison
 
@@ -92,6 +95,16 @@ Standard mitigations the recipe omits: conservative/OOD-penalized critics, pertu
 training, trust regions on the residual. (Also noted: shaped critics invert lookahead-style cross-state
 ranking — V_shaped = V − coef·φ(s) — un-shape before ranking states.)
 
+**Quantitative confirmation (Q-vs-realized audit, v50p2 buffers × q-traces).** Realized per-episode
+shaped returns obey the potential-shaping bound exactly: failures telescope to ~0 (−0.008..+0.034),
+successes climb monotonically to +1.13/+1.14 (grasp/lift/terminal structure visible) — no realized-reward
+inflation anywhere, so the reward-hacking alternative is eliminated empirically. The decoupling signature:
+4 of 5 failing episodes carried chosen-candidate Q as high as the successes (max +0.140/+0.152 vs
++0.124/+0.154) while their *peak cumulative realized reward* was +0.01..+0.04 — below even the +0.1
+grasp-acquisition lump; the edit-picked chunks never made real progress. Q and physics diverge maximally
+exactly on manufactured candidates: the chain edits → inflated Q on fakes → argmax executes → realized ≈ 0
+is measured end-to-end.
+
 ## 6. Corrected side-findings
 
 - One of the 20 fixed starts spawns the radio on the floor (object jitter off the table edge) —
@@ -102,6 +115,17 @@ ranking — V_shaped = V − coef·φ(s) — un-shape before ranking states.)
   silently advance Timeout truncation.
 - Windows/5090 node: Isaac 5.1 needs driver R580 (610.x crashes rtx.scenedb), h5py==3.15.1,
   KMP_DUPLICATE_LIB_OK=TRUE, LongPathsEnabled, IPv4-explicit tunnels.
+- `offline_ratio=0` does **not** exclude demos — it *seeds* them into the online buffer (the flag selects
+  the sampling mechanism, not the amount); the critic's diet was demo-dominated ~2.5:1 throughout.
+- Demo-side wiring verified: sparse terminal 1.0 correctly encoded; the mixed semantics (demos
+  terminal-only vs online staged-shaped) skews ≤0.2 and mildly underpays offline progress states — the
+  motivation for the consistent-diet rebuild. Demo-Q probe over a full 1956-step demo: ordering correct
+  (flat ~0 through navigation as γ³²-discounting dictates, monotone rise over the final chunks), magnitudes
+  ~10× pessimistic near terminal (0.058 vs true 0.72) from min-of-2-of-10 ensembling + TD compression.
+- 2–3 of the 20 demos toggle the radio **without lifting it** (the task doesn't require lifting) — a
+  semantics gap between the grasplift proxy criterion and the real task predicate.
+- `is_grasping` does not survive cold `og.sim.load_state` — use the EEF-proximity proxy
+  (eef_dist < 0.15) when decoding grasp state from serialized snapshots.
 
 ## 7. Implications & open directions
 
@@ -111,7 +135,10 @@ ranking — V_shaped = V − coef·φ(s) — un-shape before ranking states.)
    preferences constructed from sim-lookahead pairs (the lookahead infra exists: `lookahead_probe` env op
    + `--lookahead_n`), which never lets a critic steer live rollouts.
 4. Dense staged reward is a validated tool for critic quality (transferable to any future value-based
-   attempt); the failure was never value learning after defect #1 was fixed.
+   attempt); the failure was never value learning after defect #1 was fixed. The consistent-diet rebuild
+   (demo φ decoded from raw sim states, stored per-step rewards, grasp+lift trimming — `decode_demo_phi.py`
+   + `build_consistent_demos.py`) is the reference pipeline for feeding a critic identical reward semantics
+   across offline and online data.
 
 ## 8. Reproducibility map
 

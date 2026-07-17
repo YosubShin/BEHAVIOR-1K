@@ -1259,3 +1259,124 @@ sim determinism + 20 fixed starts + specialized policy = razor-thin Q coverage; 
 regime sits on the benign side of all three axes.
 ARC FULLY CLOSED with complete causal story. Next-direction options for user: writeup / submission
 engineering on replan-32 / support-escape without Q-ascent (lookahead-pair DPO).
+
+## REPRODUCTION TRACK: data pipeline validated BITWISE; Delta race queued (2026-07-15 ~13:10)
+
+Plan (user): reproduce the radio fine-tune from pi05_base BEFORE training hanging_pictures (parity-first).
+- Sliced per-task LeRobot repos from the NAS combined dataset (200 eps each, incl. depth videos — the
+  loader requires all 6 video keys present). Fixed: loader's silent hub-fallback on missing files.
+- **Norm-stats recomputed from our sliced radio repo == official checkpoint's bundled stats, 0.00e+00 error
+  on all 23 dims × {state,actions} × {mean,std}. Data pipeline byte-equivalent to the organizers'.**
+- Delta (NCSA) infra per user's m2sv pattern: uv-inside-apptainer, scratch layout /scratch/bchy/shin1/b1k,
+  fork+data uploaded. Configs: pi05_b1k_delta (H200, replicated) + pi05_b1k_delta_a100 (fsdp_devices=4).
+- TWO-QUEUE RACE submitted: 20234116 (gpuH200x8, ~430 chg-hrs, ~19h wall) vs 20234185 (gpuA100x4-preempt,
+  ~220 chg-hrs, ~110h wall, --requeue + auto-resume). Race arbiter auto-cancels the loser on first RUNNING.
+  Both est. start ~07-16 19:40. Budget 917 hrs. Mid-flight gates: eval 10K/20K ckpts locally during training.
+- Koa checked: only H200-NVL x4/x2 nodes via kill-shared (free, preemptible) — currently fully occupied;
+  held as backup. A100x8 ruled out (dominated: 660 chg-hrs, 50-60h, worst queue).
+
+## Q-vs-REALIZED AUDIT (user-designed): adversarial edits CONFIRMED quantitatively; no reward hacking (2026-07-16)
+
+From v50p2 buffer ckpt (per-episode realized shaped returns) x q_traces (chosen-candidate Q):
+- Failures telescope to ~0 (-0.008..+0.034) = exactly the potential-shaping bound; successes +1.13-1.14
+  (terminal 1.0 + net phi-gain ~0.14). NO realized-reward inflation across phase 2 => dense reward aligned,
+  reward-hacking branch eliminated (telescoping property held empirically).
+- Decoupling signature: failing eps 4/5 carried chosen-Q as high as the SUCCESSES (max +0.140/+0.152 vs
+  +0.124/+0.154) and realized ~0 — the critic scored residual-actor candidates success-grade; reality
+  disagreed by 1.1. Low-Q failures realized low => critic fooled specifically on manufactured candidates.
+Chain now measured end-to-end: edits -> inflated Q on fakes -> argmax executes -> realized ~0.
+Artifacts: v50_reward_audit.log, buffers ckpt @15000. (n=8 caveat; ordering-level violation = what argmax uses.)
+
+Per-step reward sequences (buffer audit, addendum): the high-Q failing episodes' PEAK cumulative reward
+was +0.01..+0.04 — below the +0.1 grasp-acquisition step — i.e. the edit-picked chunks never achieved any
+real progress (no transient grasp-then-drop). Q max +0.14-0.15 (success-grade) vs peak reality +0.04.
+Successes: clean monotone climb to +1.13/+1.14 with visible grasp/lift/terminal structure. The money table
+for the writeup's mechanism section: Q and physics diverge maximally exactly on manufactured candidates.
+
+## Demo-side wiring audit (user-requested, 2026-07-16)
+
+- Demo rewards: process_droid_dataset synthesizes sparse terminal 1.0 (done=1, mask=0 at final step) —
+  correctly encoded. Finding: MIXED reward semantics (demos terminal-only vs online staged-shaped, skew
+  bounded ≤0.2) has existed since v41 — mildly underpays progress states in offline data.
+- Demo-Q probe (v50 critic over a 1956-step full-task demo): shape CORRECT — flat ~0 through navigation
+  (true 0.72^k ~ 0 there: correct calibration, not laziness), monotone rise over the final ~5 chunks
+  (+0.023 -> +0.058). Magnitudes ~10x pessimistic near terminal (true 0.72 at 1 chunk vs 0.058) — the
+  familiar min-ensemble + TD-horizon compression; ordering (what selection/TD use) intact.
+Probe: scratchpad/demo_q_probe.py (standalone agent-loading harness — reusable for future offline Q audits).
+
+## Koa lane VALIDATED with live throughput measurement (2026-07-16 evening)
+
+Used the user's idle 2xH200 koa job (13942451, 48-min window) via srun --overlap: venv built, JAX sees
+GPUs, base ckpt downloaded (12G, persists), and **555 real training steps at 1.9 it/s (batch 16, 2xH200)**.
+Calibration: batch-64 projections => ~0.9-1.0 it/s on 4xH200 (koa job: 50K in ~14-16h) and ~2x that on
+Delta's 8xH200 (~7-9h, ~200 chg-hrs — half the prior estimate; training is single-noise-level per sample,
+much cheaper than inference-derived FLOPs). Three-way race: koa 13984075 (free, 2 rivals) vs Delta
+20248299 (H200x8) vs 20257673 (A100x4-preempt); cross-cluster arbiter armed.
+Also clarified (user q): offline_ratio=0 SEEDS demos into the online buffer (mechanism selector, not
+amount) — critic diet was demo-dominated ~2.5:1; ep_count gate counts collected episodes only, so
+"first 10 pristine" claims stand.
+
+PARKED EXPERIMENT (user-designed, post-reproduction): "consistent-diet critic" — (1) recompute staged phi
+for demo frames by decoding radio/EEF pose from the raw demos' per-step serialized sim states (exact, no
+replay drift; needs one-time offset map); (2) filter demos to the grasp+lift segment (privileged boundaries;
+check existing mini450/_core/_navend trims first). Then: retrain critic on consistent shaped rewards +
+matched state distribution, re-test PLAIN selection (no edits). NOT applicable to reproduction runs (parity).
+
+## v53 LAUNCHED: consistent-diet critic (user-designed, 2026-07-16 night)
+
+Demo phi decoded from raw per-step sim states at chunk boundaries (telescoping => boundaries suffice;
+20 eps in ~25 min). is_grasping doesn't survive cold state loads — replaced with the proximity proxy
+(eef_dist<0.15 = hand-lock signature; validated against radio_z lift traces). Findings: 18/20 demos do
+a full grasp+lift (peak phi=2.0); eps 2-3 toggle WITHOUT lifting (task doesn't require it!) and ep17
+lifts only 0.14m — all 3 get terminal 0 under grasplift semantics (17/20 successes in the shaped set).
+Datasets built: turning_on_radio_shaped (full, per-step stored rewards; chunk-exact phi lumps + criterion
+terminal) and _shaped_trim (first_grasp-256 .. peak+2 chunks; 416-448 steps ~ band scale). Loader patched
+to prefer stored "reward" (backwards-compatible). v53 = fresh critic, trim dataset, staged online shaping,
+N=1 warm, 64/20. Payoff test after warm: PLAIN selection frozen A/B vs the 65% band.
+
+## H200 run started; DATALOADER STARVATION found + zero-gap swap (2026-07-17 ~03:20)
+
+20248299 started 02:53 on gpue05 (ffmpeg image OK, 8 devices, steps ticking) BUT 4.4s/it => 60h projection.
+srun --overlap diagnosis: ALL 8 GPUs at 0%, CPUs 77% idle — the default num_workers=8 cannot feed batch-64
+x 3-cam hevc decode. Fix (infra-only, no recipe change): --num_workers=48. Zero-gap swap: submitted
+20262939 (exp_name radio_repro2, 48 workers) ALONGSIDE the running job (topped-up budget covers both
+reservations); swap-arbiter cancels the slow job when the fast one starts. Lesson for the ledger: on
+big-batch video-VLA training, ALWAYS check GPU util in the first 10 minutes — "training runs" != "GPUs fed".
+
+## v53/v54 VERDICT: consistent diet does NOT unlock selection — support cap stands (2026-07-17 ~07:00)
+
+v53 warm (fresh critic, shaped+trimmed demos, staged online rewards, 64/20): 17/25 (68%), no erosion.
+v54 payoff (plain N=8 selection, frozen): **11/20 (55%)** [FSFFSSSSSSFFFFFSSSFS] — at/below the 65% band,
+below v52's 15/22 (inconsistent-diet critic). Mechanism metrics: candidate spread 0.0136 (healthy, ~2x
+v46-era but below the v50 gate's 0.024), success/fail separation +0.034/+0.011 (clean 3x). The critic is
+fine; selection still can't beat the band. **The support-cap explanation survives its strongest test:
+even ideal reward/state feeding doesn't make best-of-8 over on-policy samples lift.** The user's data
+fixes are validated as critic-quality improvements (clean separation with HALF the training steps of v50)
+— but the ceiling is the sample distribution, exactly as v49's oracle showed.
+This closes the consistent-diet branch. RL-mechanism ledger final: commitment (replan-32) remains the
+only lever that moves outcomes on this checkpoint.
+
+## v55: edits STILL harmful with the consistent-diet critic — matrix complete (2026-07-17 ~08:00)
+
+v55 (N=8+8 edits, consistent-diet critic + its residual actor, frozen): **5/14 (36%)** [FSFFFFSFFFFSSS],
+edit-pick rate 69%. vs plain selection 55% (v54) and band 65-68%. Better critic => somewhat less
+catastrophic than v46/v50p2 (22-30%) and lower edit-pick rate (69% vs 76-89%), but the harm direction is
+unchanged: the adversarial-ascent mechanism survives ideal reward/state feeding, as predicted — it attacks
+estimation error itself, which no diet eliminates. FINAL matrix: edits harmful in all 3 critic regimes
+(mush / discriminating / consistent-diet); plain selection neutral in all; commitment (replan-32) remains
+the only positive lever. The RL-mechanism investigation is now exhaustively closed.
+Records: v54_payoff_11of20.jsonl, v55_edits_traces.jsonl.
+
+## Reproduction 10K GATE: undertrained-not-broken — continue to 20K (2026-07-17 ~11:00)
+
+10K ckpt gate eval (replan-32, instances 0-4): 0/4+ running, q=0.0. Video frames: coherent locomotion,
+radio visibly in view at start, robot navigates AWAY — locomotion prior present, task grounding absent.
+No pipeline red flags (sane actions, clean obs, no physics chaos). Call: NOT a kill — 10K/50K ≈ 1.5
+epochs; re-gate at 20K (~10-19h on slow job, ~230 chg-hrs). Kill rule at 20K: still zero task-directedness
+=> stop + investigate. Slow job at ~12.5K steps; 48-worker swap job still queued.
+
+## 10K gate eval FINAL: 0/5, verdict recorded; serve stopped (2026-07-17 ~12:30)
+
+Eval ran 1 ep per instance 0-4 and exited: 0/5, q=0.0 everywhere. Combined with frame read (coherent
+locomotion, radio in view at start, robot navigates away) => undertrained-not-broken confirmed; Delta run
+continues to the 20K gate (~19:15 at 4.9s/it). :8020 serve killed; local GPU free.
