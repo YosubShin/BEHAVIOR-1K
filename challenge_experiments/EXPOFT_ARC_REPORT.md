@@ -1,7 +1,7 @@
 # Online RL Fine-Tuning of a Flow-Matching VLA: the EXPO-FT Arc
 
 **Project:** BEHAVIOR Challenge 2026, π0.5 baseline (turning_on_radio), EXPO-FT adoption
-**Period:** 2026-07-05 → 2026-07-17 (runs v0–v55)
+**Period:** 2026-07-05 → 2026-07-17 (runs v0–v56)
 **TL;DR:** After a six-defect adoption debug, the only intervention that improved task success was an
 inference-time change — executing the policy's full 32-action chunk instead of replanning halfway
 (**15% → 54%** full-task success, generalizing to held-out instances). Every learning mechanism in the
@@ -69,6 +69,7 @@ commitment cures it. One line of inference config; generalizes across instances.
 | v52 | best-of-8 **plain** selection with the discriminating critic (no edits) | exactly neutral: 15/22; paired vs baseline 14 agree / 3 up / 3 down |
 | v53/v54 | **consistent-diet critic**: demo rewards recomputed to the same staged φ (decoded from raw per-step sim states at chunk boundaries — telescoping means boundaries suffice), demos trimmed to the grasp+lift band, stored per-step rewards | critic quality best of the arc (clean 3× success/fail separation at *half* v50's steps, healthy 0.0136 candidate spread, no erosion at 17/25 warm) — yet plain selection still capped: 11/20 vs the 65% band |
 | v55 | edits with the consistent-diet critic + its residual actor | still harmful: 5/14 (36%), 69% edit-pick rate — attenuated vs 22–30% collapses and 76–89% pick rates under worse critics, but the direction is unchanged |
+| v56 | **temperature-menu oracle selection**: 8 candidates at initial-noise temps [1,1,1.5,1.5,1.5,2,2,2], picked by the sim oracle's φ (noise proposes, selection disposes) | recovers **to** the band, not above: 17/26 (65%) vs v49's 45%. Stall-class failures convert (successes at 0.698/0.702 vs 0.684 criterion; lifts peak higher overall) but 7/9 remaining failures never leave table height even with hot candidates winning ~85–90% of decisions — **the support deficit is deep**: those states contain no lift anywhere in the policy's widened sample space. Never fell below band (selection makes noise at-worst-neutral) |
 
 **The matrix has no exceptions: edits are harmful in all three critic regimes (mush / discriminating /
 consistent-diet); every edit-free cell is neutral. Better critics attenuate the damage; no diet eliminates
@@ -130,7 +131,10 @@ is measured end-to-end.
 ## 7. Implications & open directions
 
 1. **Bank replan-32** for the challenge submission (validated, generalizing, free).
-2. Selection-class methods are exhausted on this checkpoint: even oracle selection is support-capped.
+2. Selection-class methods are exhausted on this checkpoint: plain, critic-picked, oracle-picked, and
+   temperature-widened oracle selection (v56) all land at or below the band. v56's decomposition is the
+   sharp version: the cap is mostly *deep* (never-lift states whose local sample space contains no lift at
+   any temperature), with only a thin shallow margin (criterion-marginal stalls, convertible by noise).
 3. Support escape without Q-ascent is the open research direction — e.g., offline DPO-style chunk
    preferences constructed from sim-lookahead pairs (the lookahead infra exists: `lookahead_probe` env op
    + `--lookahead_n`), which never lets a critic steer live rollouts.

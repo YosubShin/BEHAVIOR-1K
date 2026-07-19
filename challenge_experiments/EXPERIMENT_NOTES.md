@@ -1380,3 +1380,69 @@ epochs; re-gate at 20K (~10-19h on slow job, ~230 chg-hrs). Kill rule at 20K: st
 Eval ran 1 ep per instance 0-4 and exited: 0/5, q=0.0 everywhere. Combined with frame read (coherent
 locomotion, radio in view at start, robot navigates away) => undertrained-not-broken confirmed; Delta run
 continues to the 20K gate (~19:15 at 4.9s/it). :8020 serve killed; local GPU free.
+
+## 20K GATE: PASS — 2/5 successes; reproduction on-trajectory (2026-07-17 ~16:00)
+
+20K ckpt (job 20248299), replan-32, instances 0-4: F F F S S — 2/5 with q=1.0 on both successes.
+Task grounding emerged between 10K (0/5, navigates away from radio) and 20K. 40% matches the official
+ckpt's replan-32 train-split rate (12/30). Verdict: continue to 50K; no kill. Serve torn down.
+Chain fix: eval needs OMNIGIBSON_DATA_PATH=/mnt/nvme/behavior_data (gate_eval_ckpt.sh updated).
+Slow job hits 24h wall ~01:00 at ~28K steps; swap job 20262939 (48 workers) still PENDING — if not
+started by wall time, resubmit resume with --num_workers=48.
+
+## Slow job KILLED per user; fast from-scratch job carries the reproduction (2026-07-17 ~16:45)
+
+20248299 cancelled at 15h59m (~24K steps; 10K/20K ckpts kept on scratch, 20K local). Economics: ~24
+chg-hrs/h at ~20% GPU efficiency vs the queued 48-worker twin doing the whole 50K in ~11h. 20262939
+(radio_repro2, from scratch, --num_workers=48) kept queued — resubmitting as resume-from-20K would
+reset ~14h of priority age to save ~120 chg-hrs; from-scratch also gives a seam-free reproduction and
+the reusable template for hanging_pictures. First-10-minutes check when it starts: s/it + GPU util.
+
+## hanging_pictures staging: latent slicer bug found+fixed; configs/norm-stats prepped (2026-07-17 ~17:30)
+
+Prep for the next task while the fast repro job pends. Configs pi05_b1k_hang_delta/_local added (path-only
+clones), train_hang_v1.slurm staged on Delta (48 workers; NOT submitted), config.py synced to Delta.
+BUG: slice_task_repo.py zeroed videos/<k>/chunk_index only for k in dirs under SRC/videos at slice time —
+depth dirs were staged later, so hanging_pictures metadata kept source chunk_index=34 (also
+meta/episodes/chunk_index). Radio dodged it because task-0000's source chunk IS 000. Symptom: reader
+try_load fails sufficiency (600 "missing" depth videos) -> silent HF hub 404. Fixed in-place (zeroed all
+*/chunk_index cols), slicer hardened (zero every */chunk_index column present in metadata), fixed parquet
+pushed to Delta copy. Local load verified: 200 eps / 477,483 frames. Norm stats recomputing.
+
+## A100-preempt hedge lane submitted (user-approved); race arbiter armed (2026-07-17 ~23:00)
+
+H200 queue estimate slipped to Jul 19 ~23:00 (253 pending in partition). Hedge: 20276044 on
+gpuA100x4-preempt resumes radio from the 20K ckpt (42G full train_state copied to
+ckpts/pi05_b1k_delta_a100/radio_repro_a100/20000; v3 script = v2 + --num_workers=40). Arbiter monitor:
+H200 20262939 RUNNING => scancel A100 (fresh H200 run finishes faster than A100 remainder in ~all cases);
+preemptions auto-requeue+resume; 48h wall may need one resubmit (~66h A100 grind for 30K steps).
+
+## v49 failure taxonomy decoded (user asked to see videos, 2026-07-18 evening)
+
+Per-episode peaks from lookahead_traces.jsonl (peak obj_z across ALL 8 candidates, oracle choosing;
+criterion 0.684, table 0.534): 3 STALL failures (ep4 0.673 = 1.1cm short!, ep5 0.637, ep12 0.642),
+7 NEVER-LIFT failures (z pinned at 0.534-0.546 — no candidate contains a lift at any decision),
+1 floor-spawn (ep2). Refines the support-cap story: "1-2cm short" is only the stall subset.
+Implication for noise+selection (candidate-jitter experiment): plausible ceiling ~9->12/20 (converts
+stalls only) — just reaches the band; the never-lift majority needs policy change (DPO route) or noise
+at the grasp-approach decision, not the lift. Frame the experiment as DIAGNOSTIC: measures shallow
+(perturbation-reachable) vs deep support deficit. Videos pulled from 5090 box C:\co\videos_v49
+(v49-v55 video archives all live on that box, videos_v<N> dirs).
+
+## v56 VERDICT: temperature menu recovers TO the band, not above — support cap is DEEP (2026-07-19 ~02:00)
+
+v56 (user-designed noise-proposes/selection-disposes): 8 candidates at temps [1,1,1.5,1.5,1.5,2,2,2],
+ORACLE phi pick (sim-verified, --lookahead_oracle_pick), frozen v46 ckpt, same 20 fixed starts.
+RESULT: 17/26 = 65% (first-20: 13/20) — exactly AT the N=1 band; vs v49 temp-1 45%. Reads:
+(1) Shallow-deficit conversion CONFIRMED but small: 2 marginal successes at 0.698/0.702 (stall-class
+    converts); successes lift higher overall (0.74-0.92 peaks).
+(2) Never-lift class UNMOVED: 7/9 failures still z=0.51-0.54 with hot candidates winning ~85-90% of
+    decisions — even temp-2.0 flow samples contain no lift from those states. +1 floor spawn, 1 stall
+    (0.657) not converted.
+(3) Safety confirmed: oracle-selected temperature sampling never fell below band (noise proposes,
+    selection disposes = at-worst-neutral, as designed).
+CONCLUSION: the support deficit is mostly DEEP — local perturbation along the policy manifold cannot
+reach lifts from the never-lift basins; only policy change (lookahead-pair DPO route) can go above the
+band on this checkpoint. Selection-class methods now FULLY exhausted (plain/critic/oracle/temp-menu).
+Infra: temperature = scaled initial flow noise (sample_candidate_actions temps=, pi05 noise passthrough,
+--lookahead_temps/--lookahead_oracle_pick); ~9 min/ep. Run: expoft_b1k_grasplift_v56_tempmenu.
