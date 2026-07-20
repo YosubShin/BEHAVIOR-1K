@@ -1532,3 +1532,93 @@ makes mu emerge" is the one open thread, but edit==noise + identical spread make
 FINAL v58 story: edits are adversarial in high-dim, noise-equivalent in low-dim — no productive regime on
 this thin-support checkpoint. Selection class fully exhausted. Frontier = inject new experience
 (rewind-teleop / multi-chunk beam search). Infra: sample_noise_candidates + --lookahead_noise.
+
+## Depth-2 beam-search diagnostic BUILT (user-greenlit, 2026-07-20 ~11:00)
+
+Tests the multi-chunk hypothesis: do the ~7 never-lift dead basins open if you SEARCH 2 chunks deep
+instead of greedily picking 1? Beam search needs sim REWIND (try chunk A from s0, rewind, try B) — the
+one thing real-robot EXPO-FT can't do and our dump_state/load_state can. Candidates still come only from
+the policy (temperature samples); search just composes them + scores at the depth-2 leaf.
+Infra: env server ops beam_save/beam_load/beam_exec(no-restore)/beam_end (branchable lookahead_probe,
+bookkeeping frozen for the session); env_client passthroughs; train_pi_robo --beam_depth2 N mode
+(per start: branch on lookahead_n cands, keep top beam_keep by phi, branch depth-2, report best leaf
+lift z>=0.684 vs depth-1). Deployed to 5090 (byte-identical checkout confirmed, synced, restarting Isaac
+with run_grasplift_env.ps1: instance 308, 20 fixed-eval starts seed 12345, subtask grasplift, staged
+shaping). Read: depth2 opens a dead basin => multi-chunk search is the lever; none open => deficit
+>2 chunks, frontier is teleop/external expert.
+
+## Beam design FIX (user caught it): root at pre-lift stall, not episode start (2026-07-20 ~11:20)
+
+User: "how do we decide the dead-basin starting point? depth 2 only replays 2 chunks." Original build
+planted the beam at the EPISODE START (pregrasp fixed-eval start) — but grasp+lift from pregrasp takes
+~8 chunks in successes, so depth-2 (64 steps) can't reach a lift even on WINNABLE starts => uninformative
+null everywhere. FIX: roll the failed episode forward greedily (temp+oracle), save a beam root at every
+decision, then plant depth-2 beams at the TOP-K phi states (the post-approach/pre-lift stall points where
+a lift is actually within 2 chunks). "Opened" = any top-K root's depth-2 leaf reaches z>=0.684. Rejected
+user's two options explicitly: 2nd-from-last (wrong if grasp early then flail to timeout), uniform
+(wastes probes on navigation states where lift is impossible). Also hardened beam_exec to pin
+_current_step across the session (hundreds of probes would else trip the 600-step truncation). Re-synced
+env server to 5090, restarting Isaac.
+
+## Beam infra pivot: env server LOCAL (Windows Session-0 blocked Isaac restart) (2026-07-20 ~11:25)
+
+Restarting the 5090 env server via ssh failed: OmniGibson "signal only works in main thread" — ssh gives
+Session 0, Isaac needs the interactive desktop session the original (user-launched) server had. Stale log
+masked it (thought first Start-Process loaded; it was the ORIGINAL server's log). Pivot: beam is
+inference-only (num_updates 0, no training graph), so sim+policy fit the local 97GB card — run env server
+LOCALLY (:8104), no 5090/tunnel. Snapshots already local (/mnt/nvme/expoft_snapshots/miniradio_pregrasp_own).
+Launch script beam_envserver.sh (exact grasplift config: inst 308, 20 fixed starts, staged shaping,
+OMNIGIBSON_DATA_PATH=/mnt/nvme/behavior_data). Beam then points at localhost:8104. Ledger: local env
+server is the robust path for solo diagnostics — no Windows-session fragility.
+
+## Beam MID-RUN reframe: dead basins are GRASP failures, not lift failures (2026-07-20 ~12:50)
+
+Beam trace phi reveals it (staged phi: pre-grasp 1-tanh(dist) <1.0, grasping 1+lift >=1.0):
+- winnable starts (1,4): phi reaches 2.0 (grasped+lifted); beam plants at grasp/lift decisions;
+  depth-2 pushes lift higher (0.71->0.79) — sanity OK.
+- dead basins (2,3): phi MAXES ~0.88 (=> dist~0.12m, NEVER GRASPS). Hand reaches ~12cm from radio,
+  hovers, never closes grasp. Beam plants at closest-approach hover states (#3-5, #13-15); depth-2 8x8
+  from there finds no grasp+lift (z stays 0.53-0.54). Correcting earlier "reposition->approach->lift"
+  framing: the robot ALREADY approaches; the un-proposed behavior is the GRASP-CLOSE itself (1 chunk).
+Beam uses ORACLE scoring (not critic) => this is a pure PROPOSAL failure, critic-independent (answers
+user Q: not the pessimistic critic; the lifting/grasping candidate isn't in the policy's sample set).
+Videos (ep242/236 fail, ep250 success from videos_grasplift, same config) show reach-and-hover vs clean
+grasp. Frontier sharpened: missing behavior = single grasp from hover => one teleop nudge / grasp
+primitive supplies it trivially. Beam 5/20; 2 stall basins closed so far.
+
+## Beam start 12 OPENED — confirms grasp-failure story (2026-07-20 ~14:40)
+
+start 12: greedy pinned 0.534 for 15 dec, then dec#15 phi=1.11 (GRASPED!) z=0.551; beam planted at that
+grasp state -> depth2 z=0.728 (lift!). Other roots (#13/#14 phi~0.83, pre-grasp) opened nothing.
+=> depth-2 opens a basin IFF the policy grasps somewhere on the trajectory: lift is 2-chunk-reachable
+FROM a grasp; the grasp is the deficit. Never-grasp basins (2,3,5,6,7,10,11 phi max ~0.88) stay shut;
+grasp-then-timeout basins (12) open. Refines verdict from flat-null to "beam opens exactly the grasp
+basins" — a POSITIVE structural result: the missing 1-chunk behavior is the grasp-close.
+
+## PAPER greenlit: EXPO coverage-ablation keystone experiment (2026-07-20 ~16:15)
+
+Goal = paper. Keystone: reproduce EXPO positive on its OWN sim benchmark then ablate coverage, showing
+the edit/RL advantage over BC collapses as coverage narrows — proving our BEHAVIOR negative generally.
+EXPO-FT (real robot) intervention-ablation NOT feasible (no hardware/data); our BEHAVIOR arc IS its sim
+proxy. Repo cloned /mnt/nvme/expo_repo (pd-perry/EXPO, parent of our expo-ft). Knobs confirmed:
+  - full EXPO: --config.N=8 --config.n_edit_samples=8 --config.r_action_scale=0.05
+  - no-edit (selection only): --config.n_edit_samples=0
+  - base: --config.N=1 --config.n_edit_samples=0
+  - coverage: subsample D4RL offline dataset fraction + play/diverse variants
+Design: {full, no-edit, base} x coverage{100,50,25,10,5%} x 3 seeds; metric = final return + gaps
+(EXPO-BC), (EXPO - no-edit) vs coverage. ~30min/run, MuJoCo/JAX only (no Isaac). conda env 'expo'
+(py3.8) building. Repro target first: antmaze-large-play-v2 (or -diverse, the stitching benchmark).
+Setup risk: D4RL/mujoco-py/old-gym friction.
+
+## BEAM depth-2 FINAL VERDICT 20/20 (2026-07-20 ~16:20)
+
+9 winnable (greedy lifts on its own; depth-2 all lift too), 1 floor-spawn (unwinnable), 10 stall dead-basins.
+Of the 10 dead basins: 1 OPENED by depth-2 (start 12), 9 CLOSED.
+PERFECT SEPARATION: opens IFF the policy grasped somewhere on the traj (opened 1/1 had grasp root phi>1;
+closed 0/9 had a grasp root). => depth-2 lifts iff a grasp already occurred; it cannot MANUFACTURE the grasp.
+CONCLUSION: beam search is a DIAGNOSTIC success, SOLUTION failure. It localized the entire deficit to the
+GRASP-close (1 chunk): lift is 2-chunk-reachable from any grasp (start 12: 0.55->0.73; all winnable pushed
+higher), but the never-grasp basins (9/10) stay shut under exhaustive oracle-scored 8x8 search. The missing
+behavior is a single grasp action the policy won't propose from the hover state — smallest possible
+intervention (one teleop grasp / grasp primitive). Frontier confirmed: inject the grasp, don't search for it.
+Infra: beam_save/load/exec/end env ops + --beam_depth2 harness (roots = top-K phi along greedy traj).

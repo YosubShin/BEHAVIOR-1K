@@ -802,6 +802,102 @@ class BehaviorEnvOps:
         ) = saved_book
         return {"observation": final_obs, "oracle": oracle}
 
+    def beam_save(self) -> dict:
+        """Save the current sim state under a fresh id for beam-search branching.
+        The FIRST beam_save of a session also snapshots episode bookkeeping +
+        _current_step; beam_end restores those so the diagnostic never advances
+        the real episode. Returns {"state_id": int}."""
+        import omnigibson as og
+
+        if not hasattr(self, "_beam_cache"):
+            self._beam_cache = {}
+            self._beam_next_id = 0
+        if not hasattr(self, "_beam_book") or self._beam_book is None:
+            base_env = self.env
+            while not hasattr(base_env, "_current_step") and hasattr(base_env, "env"):
+                base_env = base_env.env
+            self._beam_book = (
+                base_env,
+                base_env._current_step,
+                (self._steps, self._last_reward, self._prev_q, self._prev_phi,
+                 self._success, self._done, getattr(self, "_grasp_streak", 0)),
+            )
+        sid = self._beam_next_id
+        self._beam_next_id += 1
+        self._beam_cache[sid] = og.sim.dump_state(serialized=False)
+        return {"state_id": int(sid)}
+
+    def beam_load(self, state_id: int) -> dict:
+        """Load a saved beam state and return the policy observation there, so the
+        client can sample the next candidates from this node. Does NOT touch
+        episode bookkeeping (frozen for the whole beam session)."""
+        import omnigibson as og
+
+        og.sim.load_state(self._beam_cache[int(state_id)], serialized=False)
+        self.robot.set_joint_positions(self.robot.get_joint_positions())
+        for _ in range(3):
+            og.sim.render()
+        obs2, _ = self.env.get_obs()
+        self.evaluator.obs = self.evaluator._preprocess_obs(obs2)
+        return {"observation": self._observation()}
+
+    def beam_exec(self, actions: list) -> dict:
+        """Execute a candidate chunk from the CURRENT sim state and STAY there (no
+        restore — this is the descend step). Returns terminal obs + oracle signals.
+        Bookkeeping stays frozen; the real episode is unaffected until beam_end.
+        The env's _current_step is pinned across the whole beam session so long probe
+        sweeps (hundreds of beam_exec calls) never trip the max-steps truncation."""
+        import torch as th
+
+        base_env = self.env
+        while not hasattr(base_env, "_current_step") and hasattr(base_env, "env"):
+            base_env = base_env.env
+        pinned_step = base_env._current_step
+        a = np.asarray(actions, dtype=np.float32)
+        obs = None
+        for row in a:
+            obs, _, _, _, _ = self.env.step(th.from_numpy(row), n_render_iterations=1)
+        base_env._current_step = pinned_step
+        self.evaluator.obs = self.evaluator._preprocess_obs(obs)
+        final_obs = self._observation()
+        oracle = {}
+        try:
+            if self._goal_obj is not None:
+                from omnigibson.controllers.controller_base import IsGraspingState
+
+                oracle["grasping"] = bool(
+                    any(
+                        self.robot.is_grasping(arm=arm, candidate_obj=self._goal_obj) == IsGraspingState.TRUE
+                        for arm in self.robot.arm_names
+                    )
+                )
+                oracle["obj_z"] = float(self._goal_obj.get_position_orientation()[0][2])
+            if self.shaping_coef > 0.0:
+                oracle["phi"] = float(self._shaping_potential())
+        except Exception:
+            logger.warning("beam oracle failed", exc_info=True)
+        return {"observation": final_obs, "oracle": oracle}
+
+    def beam_end(self, origin_id: int) -> dict:
+        """Restore the sim to the origin state, re-pin drive targets, restore frozen
+        episode bookkeeping, and clear the beam cache. Ends a beam-search session."""
+        import omnigibson as og
+
+        og.sim.load_state(self._beam_cache[int(origin_id)], serialized=False)
+        base_env, saved_step, saved_book = self._beam_book
+        base_env._current_step = saved_step
+        self.robot.set_joint_positions(self.robot.get_joint_positions())
+        for _ in range(3):
+            og.sim.render()
+        obs2, _ = self.env.get_obs()
+        self.evaluator.obs = self.evaluator._preprocess_obs(obs2)
+        (self._steps, self._last_reward, self._prev_q, self._prev_phi,
+         self._success, self._done, self._grasp_streak) = saved_book
+        self._beam_cache = {}
+        self._beam_next_id = 0
+        self._beam_book = None
+        return {"status": "ok"}
+
     def get_eval_obs(self) -> dict:
         """The evaluator's preprocessed obs — byte-for-byte what the challenge
         eval client ships to a serve_b1k policy server. Lets an external probe
@@ -890,6 +986,14 @@ def _execute_op(op: str, req: dict, state: dict, server_cfg: dict) -> dict:
         return env.get_eval_obs()
     if op == "lookahead_probe":
         return env.lookahead_probe(req["actions"])
+    if op == "beam_save":
+        return env.beam_save()
+    if op == "beam_load":
+        return env.beam_load(req["state_id"])
+    if op == "beam_exec":
+        return env.beam_exec(req["actions"])
+    if op == "beam_end":
+        return env.beam_end(req["origin_id"])
     if op == "get_info_for_step":
         return env.get_info_for_step()
     return {"status": "error", "message": f"unknown operation {op}"}
