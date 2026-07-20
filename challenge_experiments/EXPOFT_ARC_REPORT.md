@@ -1,7 +1,7 @@
 # Online RL Fine-Tuning of a Flow-Matching VLA: the EXPO-FT Arc
 
 **Project:** BEHAVIOR Challenge 2026, π0.5 baseline (turning_on_radio), EXPO-FT adoption
-**Period:** 2026-07-05 → 2026-07-17 (runs v0–v56)
+**Period:** 2026-07-05 → 2026-07-17 (runs v0–v58)
 **TL;DR:** After a six-defect adoption debug, the only intervention that improved task success was an
 inference-time change — executing the policy's full 32-action chunk instead of replanning halfway
 (**15% → 54%** full-task success, generalizing to held-out instances). Every learning mechanism in the
@@ -70,10 +70,15 @@ commitment cures it. One line of inference config; generalizes across instances.
 | v53/v54 | **consistent-diet critic**: demo rewards recomputed to the same staged φ (decoded from raw per-step sim states at chunk boundaries — telescoping means boundaries suffice), demos trimmed to the grasp+lift band, stored per-step rewards | critic quality best of the arc (clean 3× success/fail separation at *half* v50's steps, healthy 0.0136 candidate spread, no erosion at 17/25 warm) — yet plain selection still capped: 11/20 vs the 65% band |
 | v55 | edits with the consistent-diet critic + its residual actor | still harmful: 5/14 (36%), 69% edit-pick rate — attenuated vs 22–30% collapses and 76–89% pick rates under worse critics, but the direction is unchanged |
 | v56 | **temperature-menu oracle selection**: 8 candidates at initial-noise temps [1,1,1.5,1.5,1.5,2,2,2], picked by the sim oracle's φ (noise proposes, selection disposes) | recovers **to** the band, not above: 17/26 (65%) vs v49's 45%. Stall-class failures convert (successes at 0.698/0.702 vs 0.684 criterion; lifts peak higher overall) but 7/9 remaining failures never leave table height even with hot candidates winning ~85–90% of decisions — **the support deficit is deep**: those states contain no lift anywhere in the policy's widened sample space. Never fell below band (selection makes noise at-worst-neutral) |
+| v58 | **dimensionality restriction**: residual projected to right-arm+gripper × 4 time blocks (32 eff. dims vs 736 — the reference DROID regime), warmed in-subspace, then oracle-probed vs plain | the adversarial pathology is **cured**: edited candidates no longer carry inflated value (V(edit) ≈ V(plain), realized φ ≈ plain) — direct interventional confirmation of the dimensionality axis in §5. But edits win only ~8% of oracle duels and open no dead basin: restriction removes the poison **and** the teeth |
+| v58d | **isotropic-noise control** (three-way menu: 8 plain + 8 residual-edit + 8 matched-noise through the identical scale+projection pipeline; entropy target corrected to the 32-dim subspace) | the trained residual is **statistically indistinguishable from same-scale random noise**: win shares edit 9% / noise 7%; per-decision paired best-φ edit-better 42 / noise-better 33 (56/44, mean diff +0.0009 φ, n.s.); both a hair *below* plain temperature sampling. Functionally the low-dim residual is a noise generator |
 
 **The matrix has no exceptions: edits are harmful in all three critic regimes (mush / discriminating /
 consistent-diet); every edit-free cell is neutral. Better critics attenuate the damage; no diet eliminates
-it, because the ascent attacks estimation error itself.**
+it, because the ascent attacks estimation error itself. Shrinking the edit space to the reference's
+dimensionality removes the harm but leaves the residual indistinguishable from isotropic noise — so the
+edit operator has _no_ productive regime on this thin-support checkpoint: adversarial when high-dim,
+noise-equivalent when low-dim.**
 
 ## 5. Mechanism: why edits are the poison
 
@@ -135,6 +140,10 @@ is measured end-to-end.
    temperature-widened oracle selection (v56) all land at or below the band. v56's decomposition is the
    sharp version: the cap is mostly *deep* (never-lift states whose local sample space contains no lift at
    any temperature), with only a thin shallow margin (criterion-marginal stalls, convertible by noise).
+   The perturbation-class is likewise exhausted: dimensionality-restricted residual edits (v58/v58d) cure
+   the adversarial harm but reduce to isotropic noise, opening no dead basin. Every mechanism that
+   *chooses among or locally perturbs* the policy's own samples is capped; escaping the band requires
+   *injecting new experience* the policy cannot currently produce.
 3. Support escape without Q-ascent is the open research direction — e.g., offline DPO-style chunk
    preferences constructed from sim-lookahead pairs (the lookahead infra exists: `lookahead_probe` env op
    + `--lookahead_n`), which never lets a critic steer live rollouts.

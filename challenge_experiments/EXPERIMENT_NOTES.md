@@ -1446,3 +1446,89 @@ reach lifts from the never-lift basins; only policy change (lookahead-pair DPO r
 band on this checkpoint. Selection-class methods now FULLY exhausted (plain/critic/oracle/temp-menu).
 Infra: temperature = scaled initial flow noise (sample_candidate_actions temps=, pi05 noise passthrough,
 --lookahead_temps/--lookahead_oracle_pick); ~9 min/ep. Run: expoft_b1k_grasplift_v56_tempmenu.
+
+## v57 LAUNCHED: temperature RFT (user-designed follow-on to v56) (2026-07-19 ~07:40)
+
+Hypothesis: v56's temp-discovered wins become PERMANENT if the policy imitates them — noise at rollout
+(exploration) + success-only BC = support-escaping improvement operator with no critic steering.
+Config: v50warm learner (actor lr 2.5e-6, n_edit_samples=0, split4, actor_success_only) resumed from a
+COPY of v46 ckpt-15000 (same actor as v56); rollouts = lookahead temps [1,1,1.5x3,2x3] + oracle phi pick;
+--num_updates 20/episode; ckpt every 3K steps; XLA 0.72 (user's local training ended; drop to 0.30
+collection-only if they need VRAM). Gate: deployment eval (temp-1 N=1 frozen) on RFT'd ckpts vs 65% band;
+iteration-2 question = do never-lift basins open after the policy shifts. Run: v57_temprft.
+
+## v58 LAUNCHED: dim-restricted directed edits, oracle-judged (user-prioritized) (2026-07-19 ~10:00)
+
+User flipped priority: directedness > jitter (v57 parked after external kill; 3 eps banked, resumable).
+Build: residual_projection="b1k_rarm_g_blocks4" — right_arm+right_gripper (dims 15-22) x 4 time blocks
+= 32 effective dims vs 736 (reference xyzg regime); linear idempotent projection applied in BOTH
+update_residual_actor loss and _sample_residual (generalized the reference's residual_action_xyzg hook).
+New: sample_edit_candidates + --lookahead_edits K (directed proposals probed/oracle-picked like plain;
+traces tag n_plain). Phase A: resume v53 consistent-diet ckpt, warm residual in-subspace ~10 eps
+(rollouts stay temps+oracle; edits not executed). Phase B: frozen probe 8 plain + 8 edited, oracle pick —
+one-variable vs v56. Key read: do edited candidates open never-lift basins / beat temp-jitter?
+HIL note: expo-ft has full intervention plumbing (is_hil/hil_chunk/action_type human, DAgger sampling for
+BC class); sim rewind+teleop (JoyLo) = surgical support injection at the 7 dead basins if v58 also fails.
+
+## Kill mystery SOLVED: harness process-group kills, not the box (2026-07-19 ~14:10)
+
+User confirmed they killed nothing. v57/v58 deaths were clean SIGKILLs of harness-tracked background
+tasks holding the 0.85 VRAM fraction (0.30-fraction v56 survived untouched). Diagnostic relaunch of v58
+via setsid (own session, wrapper records wait-status, sidecar logs RSS/VRAM every 10s): ALIVE past both
+prior death points (1h+). LEDGER RULE: launch long GPU runs DETACHED (setsid + wrapper/sidecar under
+/mnt/nvme/expoft_runs/), monitor via files, never as harness background children.
+
+## Paper cross-check: both EXPO papers carry an external support source we lacked (2026-07-19 ~21:30)
+
+EXPO (arXiv 2507.07986, sim-only: D4RL/robomimic/MimicGen): support from BROAD-COVERAGE offline data
+(antmaze undirected datasets pin Q over wide regions); per-step 7-30 dim actions; thousands of episodes.
+EXPO-FT (arXiv 2605.25477, real robot — the recipe we adopted): support from HUMAN INTERVENTIONS —
+central to the method (SpaceMouse corrections of any actions in a chunk, intervention rate anneals to 0);
+demos 10-40; RL gated on SFT>=40%; sparse classifier reward; edit bound beta=0.05-0.2 ("smaller for
+precision" — ours 0.2; same per-dim beta => ~3x larger perturbation norm at 736 dims vs their 60-130).
+We ran with NEITHER source (20 narrow demos, zero interventions) — the mechanism matrix measured that the
+learning loop alone cannot manufacture support, consistent with both papers carrying an external supply.
+v58 phase B interim (7 eps): edits win ~5-10% of oracle duels, phi ~= plain (+0.005), V(edit)~=V(plain)
+(no inflation — dim restriction CURED the adversarial pathology, causal confirmation of the axis), and
+dead basins stay closed for edits too (0.508/0.534 both types). Restriction removes poison AND teeth.
+Frontier: rewind-teleop (sim-better version of EXPO-FT's own channel) or multi-chunk beam search in sim.
+
+## v58 phase B CUT (confounded) -> v58c with rescaled entropy target (2026-07-19 ~21:55)
+
+User asked "any knob we changed that could cause toothlessness?" — audit found YES, mine: SAC target
+entropy computed for full_action_dim=736 while Q only sees the 32-dim projected subspace -> alpha keeps
+in-subspace sigma jitter-grade, mu never dominates -> edits ~= noise BY CONSTRUCTION. Second confound:
+residual only ~240 grad steps (v53 ckpt residual was never trained). Reference-faithful knobs verified:
+residual lr 3e-4, edit_scale 0.2 (paper range 0.05-0.2), entropy_scale, REDQ, 64/20. (VLA actor lr
+2.5e-6 doesn't touch the residual optimizer.)
+Phase B interim (RECORDED AS CONFOUNDED): 5/7, edit-wins 7/105, dead basins closed for both types,
+no adversarial signature (V(edit)~=V(plain) — the CURE result stands regardless of the confound).
+v58c: entropy_dim=32 for the projection, resume ckpt 15000, warm +20 eps, then re-probe.
+
+## v58c transient CUDA_ERROR_LAUNCH_TIMEOUT @ warm ep26; resumed (2026-07-20 ~04:25)
+
+Kernel exceeded driver watchdog (launch timeout) — not OOM (GPU 2.3G used after), not thermal (42C/54W).
+Likely transient contention/stall. Resumed from ckpt-18000 (idempotent --resume). If recurs, investigate
+driver 580.88 / kernel watchdog TDR. Was ~11 warm eps past the entropy fix; plan unchanged: warm to
+~ckpt-24000 then re-probe with --lookahead_edits 8.
+
+## v58d VERDICT: trained low-dim residual == isotropic noise (user-designed control) (2026-07-20 ~08:30)
+
+Three-way probe from the entropy-CORRECTED ckpt-18000 (target -16 not -368): each decision probes
+8 temp-plain + 8 residual-edit + 8 matched-noise (tanh(N(0,I)) through the IDENTICAL edit_scale+projection
++add pipeline). Oracle picks. 6 eps, 81 decisions:
+- Win shares: plain 84% | edit 9% | noise 7% (edit ~= noise).
+- Per-decision paired best-phi (edit vs noise): edit-better 42 / noise-better 33 / tie 6 — 56/44 split,
+  mean diff +0.0009 phi (sd 0.021), NOT significant (sign test p~0.35).
+- Both edit AND noise sit slightly BELOW plain temp sampling (0.818/0.817 vs 0.848) — the residual is not
+  even neutral vs plain; it's a hair worse, exactly like noise.
+- Dead basins closed for all three types (0.534, 0.541).
+CONCLUSION: with correctly-scaled entropy, the trained residual is STATISTICALLY INDISTINGUISHABLE from
+same-scale isotropic noise. The dimensionality restriction removed the adversarial teeth (v58: no Q
+inflation) AND left nothing directed — functionally the residual is a noise generator in this regime.
+The entropy-scaling confound is thus RESOLVED: the fix didn't rescue directedness. Single remaining
+caveat: ~11 warm eps / ~220 residual grad steps is short vs reference continuous training — "more training
+makes mu emerge" is the one open thread, but edit==noise + identical spread makes it unlikely.
+FINAL v58 story: edits are adversarial in high-dim, noise-equivalent in low-dim — no productive regime on
+this thin-support checkpoint. Selection class fully exhausted. Frontier = inject new experience
+(rewind-teleop / multi-chunk beam search). Infra: sample_noise_candidates + --lookahead_noise.
