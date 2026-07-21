@@ -18,6 +18,27 @@ sim-only, **no human interventions** — i.e. the EXPO-FT recipe with its covera
 the thin-support pole; every claim below is from paired fixed-start evals + video/oracle traces, never
 loss curves.
 
+### 1a. Adoption ledger: the null is not an implementation artifact (credibility armor)
+
+Before any negative claim is admissible, we rule out that the recipe simply wasn't implemented correctly.
+Six **silent** defects each made the recipe look "just bad" without erroring; all were found by paired
+fixed-start evals + video review, *not* loss curves, and each has an isolated cause and fix. Only after
+all six were corrected — and the recipe verified faithful to the reference config — do the C1–C9 negatives
+stand. This ledger is itself a reproducibility contribution.
+
+| # | Defect | Symptom | Fix |
+|---|--------|---------|-----|
+| 1 | Replay-buffer chunk backfill re-anchored **delta** actions to the wrong state | ~75% of action signal erased 8 steps into a chunk; critic trained on corrupted (s,a) | anchor to chunk-start raw state (`raw_state`) |
+| 2 | `actor_success_only` defaulted False | BC on failures → policy imitates its own dithering | set True (reference had it; our config didn't) |
+| 3 | Output transforms fed dummy-zero state | Unnormalize(0)=mean state → arm fly-up / pinning | plumb `normalized_state` through |
+| 4 | Receding-horizon replanning (16 of 32) | intention resampling → dithering | replan-32 (the C1 positive) |
+| 5 | Actor lr 2.5e-5 (tuned for LoRA-on-generic-base) | graded erosion of the specialized ckpt (~25 pts/600 upd) | 2.5e-6 |
+| 6 | batch/UTD silently halved (32/10 vs reference 64/20) | ¼ critic gradient per datum | restored (needs sim off-GPU: 48GB graph + 19GB TD tensor) |
+
+**Meta-lesson (goes in the paper):** small-n unpaired evals are pure noise here — the *same* checkpoint
+read 38%/24%/8% across three runs. Every conclusion is from paired fixed-start evals; this is why the
+negative is trustworthy where a loss-curve or unpaired-eval study would not be.
+
 | # | Claim | Key evidence |
 |---|---|---|
 | C1 | The **only** intervention that improved task success was inference-time **commitment** (execute the full 32-chunk vs replan-16). | 15%→40% train, 75% held-out, 54% combined; grasp subtask 12/20→18/20. One CLI flag. |
